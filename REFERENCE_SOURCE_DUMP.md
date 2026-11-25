@@ -3664,3 +3664,733 @@ internal fun Modifier.timerDialTap(enabled: Boolean, running: Boolean, onToggle:
 internal fun stopwatchFaceDiameter(width: Dp): Dp =
     minOf(410.dp, (width - 32.dp).coerceAtLeast(1.dp))
 ```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/screens/StackedDigits.kt`
+
+```kotlin
+package app.expressiveclock.ui.screens
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.ui.draw.clip
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.Icon
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import app.expressiveclock.ui.theme.ClockFace
+import app.expressiveclock.ui.blueGlow
+import app.expressiveclock.ui.glass
+import app.expressiveclock.ui.luminousElasticClickable
+import app.expressiveclock.ui.theme.Numerals
+
+/**
+ * The concept's timer readout: **one pair of digits per line**, right-aligned, with the
+ * separators drawn as two large dots rather than set as a colon.
+ *
+ * Three lines of two digits instead of one line of eight is what lets the numerals be this big.
+ * On one line, `00:00:09` across a 412 dp screen caps out around 60 dp of cap height, while
+ * stacked it reaches 77 dp. The concept is not being decorative here; the stack is the only way to
+ * get a glanceable countdown onto a phone.
+ *
+ * Measured off the render: the three rows are in exact register, laid out as a **3-cell tabular
+ * string** (one separator cell plus two digit cells, cell advance 67.2 dp), and that block is
+ * **centred on the screen**, not right-aligned. Row pitch is 115 dp baseline to baseline, an ink
+ * gap of 35.2 dp. The separator dots sit in the leading cell on the baseline, 18 dp across with
+ * their centres 40.8 dp apart, and row one's pictogram is centred in that same cell.
+ *
+ * The readout has its own cut of the same family, `wdth` 95 / `wght` 490 with the slashed zero.
+ * That cut was measured off the render rather than borrowed from the alarm grid, which is a much
+ * narrower and much lighter face and looked nothing like it.
+ */
+@Composable
+fun StackedDigits(
+    parts: List<String>,
+    capHeight: Dp,
+    color: Color,
+    modifier: Modifier = Modifier,
+    leading: ImageVector? = null,
+    label: String? = null,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (label != null) {
+                    Modifier.clearAndSetSemantics { contentDescription = label }
+                } else {
+                    Modifier
+                }
+            ),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        // 35.2 dp measured. `Numerals` boxes are ink-tight, so this is the true ink gap with no
+        // ascent padding quietly padding it out.
+        verticalArrangement = Arrangement.spacedBy(35.dp),
+    ) {
+        parts.forEachIndexed { i, part ->
+            DigitRow(
+                part = part,
+                capHeight = capHeight,
+                color = color,
+                leading = leading.takeIf { i == 0 },
+                separator = i > 0,
+            )
+        }
+    }
+}
+
+/**
+ * One line of the readout: a leading cell holding a pictogram, colon dots or nothing, followed by
+ * the digit pair.
+ *
+ * Public because things have to line up with it. The stopwatch's Start button is exactly as wide as
+ * a `: ss` row, and the only way to be *exactly* that is to measure this composable rather than to
+ * add up a cell constant and a guess at the digit advance.
+ */
+@Composable
+fun DigitRow(
+    part: String,
+    capHeight: Dp,
+    color: Color,
+    modifier: Modifier = Modifier,
+    leading: ImageVector? = null,
+    separator: Boolean = false,
+) {
+    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
+        // The separator's own tabular cell, the same advance as a digit cell.
+        Box(Modifier.width(SEPARATOR_CELL_DP.dp), contentAlignment = Alignment.Center) {
+            when {
+                leading != null -> androidx.compose.material3.Icon(
+                    leading,
+                    contentDescription = null,
+                    tint = color,
+                    modifier = Modifier.size(46.dp),
+                )
+                separator -> ColonDots(color)
+            }
+        }
+        Numerals(
+            text = part,
+            capHeight = capHeight,
+            color = color,
+            // The concept's Plank cut: 0.66 wide over tall, stroke 0.139 of cap, slashed zero. Not
+            // the alarm grid's condensed face and not its light off-weight.
+            width = ClockFace.TIMER_WIDTH,
+            weight = ClockFace.TIMER_WEIGHT,
+            slashedZero = true,
+        )
+    }
+}
+
+/** Measured: 18 dp dots with their centres 40.8 dp apart, so 22.8 dp of clear space between. */
+private const val SEPARATOR_CELL_DP = 67.2f
+private val DOT_DIAMETER = 18.dp
+
+/**
+ * How far a row's **visible** left edge sits inside its layout box.
+ *
+ * The separator gets a whole tabular cell of the same advance as a digit, and the colon's dots are
+ * centred in it. So the box starts a good deal to the left of any ink, and anything that lines up
+ * with the box rather than with the colon comes out looking off-centre even though the number is
+ * right. Derived from the two constants above rather than measured off a screenshot, so it cannot
+ * drift away from them.
+ */
+val ROW_INK_INSET: Dp = (SEPARATOR_CELL_DP.dp - DOT_DIAMETER) / 2
+
+@Composable
+private fun ColonDots(color: Color) {
+    Column(verticalArrangement = Arrangement.spacedBy(22.8.dp)) {
+        repeat(2) {
+            Surface(color = color, shape = CircleShape, modifier = Modifier.size(DOT_DIAMETER)) {}
+        }
+    }
+}
+
+/**
+ * The wide action pill the concept puts under its timer.
+ *
+ * Measured at **136 dp tall** and fully rounded: an M3 Expressive extra-large button. This is the
+ * one control on the screen, so it gets the size that says so. M3E tactic 4, contain for emphasis,
+ * in its most literal form. An earlier build had it at 78 dp, which read as an ordinary button.
+ */
+/** Measured off the render's Pause button. */
+const val PILL_HEIGHT_DP = 136f
+
+@Composable
+fun WidePill(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    container: Color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.58f),
+    content: Color = MaterialTheme.colorScheme.onPrimaryContainer,
+    icon: ImageVector? = null,
+    outlined: Boolean = false,
+    height: Dp = PILL_HEIGHT_DP.dp,
+    compact: Boolean = false,
+    fillWidth: Boolean = true,
+    contentPaddingH: Dp = if (compact) 10.dp else 24.dp,
+    contentAlpha: Float = 1f,
+    glow: Boolean = true,
+) {
+    Box(
+        modifier = modifier
+            .then(if (fillWidth) Modifier.fillMaxWidth() else Modifier)
+            .height(height)
+            .luminousElasticClickable(
+                shape = CircleShape,
+                maxStretchPercent = 0.09f,
+                maxTranslateDp = 2.4.dp,
+                onClick = onClick,
+            )
+            .clip(CircleShape)
+            .glass(
+                CircleShape,
+                if (outlined) MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = .94f)
+                else container.copy(alpha = .40f),
+                .86f,
+                shadowElevation = if (glow) 18.dp else 0.dp,
+            )
+            .padding(horizontal = contentPaddingH),
+        contentAlignment = Alignment.Center,
+    ) {
+        val textStyle = if (compact) MaterialTheme.typography.titleMediumEmphasized else MaterialTheme.typography.headlineSmallEmphasized
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth().graphicsLayer { alpha = contentAlpha },
+            horizontalArrangement = Arrangement.Center,
+        ) {
+            if (icon != null) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    modifier = Modifier.size(if (compact) 22.dp else 30.dp),
+                    tint = content,
+                )
+                if (text.isNotEmpty()) Spacer(Modifier.width(if (compact) 8.dp else 14.dp))
+            }
+            if (text.isNotEmpty()) {
+                FittedPillLabel(text, textStyle.copy(color = content), Modifier.weight(1f, fill = false))
+            }
+        }
+    }
+}
+
+/** Fit the measured glyph run, including letter spacing and Android's nonlinear font scaling. */
+internal fun pillLabelScale(width: Int, height: Int, availableWidth: Int, availableHeight: Int): Float =
+    minOf(1f, availableWidth.toFloat() / width.coerceAtLeast(1), availableHeight.toFloat() / height.coerceAtLeast(1))
+        .coerceAtLeast(0f)
+
+@Composable
+private fun FittedPillLabel(text: String, style: androidx.compose.ui.text.TextStyle, modifier: Modifier) {
+    androidx.compose.ui.layout.SubcomposeLayout(modifier) { constraints ->
+        val label = subcompose("label") {
+            Text(text, style = style, maxLines = 1, softWrap = false)
+        }.single().measure(androidx.compose.ui.unit.Constraints())
+        val fit = pillLabelScale(label.width, label.height, constraints.maxWidth, constraints.maxHeight)
+        val width = (label.width * fit).toInt().coerceIn(constraints.minWidth, constraints.maxWidth)
+        val height = (label.height * fit).toInt().coerceIn(constraints.minHeight, constraints.maxHeight)
+        layout(width, height) {
+            label.placeWithLayer(0, 0) {
+                scaleX = fit; scaleY = fit
+                transformOrigin = androidx.compose.ui.graphics.TransformOrigin(0f, 0f)
+            }
+        }
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/screens/WideClockPages.kt`
+
+```kotlin
+package app.expressiveclock.ui.screens
+
+import android.animation.ValueAnimator
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.unit.Velocity
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.clickable
+import kotlinx.coroutines.launch
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.LayerOutsets
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import app.expressiveclock.core.WorldCity
+import app.expressiveclock.ui.WorldClockDigitalReadout
+import app.expressiveclock.ui.MechanicalText
+import app.expressiveclock.ui.rememberSystem24HourFormat
+import app.expressiveclock.ui.rememberWallTicker
+import app.expressiveclock.ui.sheets.prettify
+import app.expressiveclock.ui.theme.WorldClockType
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.util.Locale
+import kotlin.math.roundToInt
+
+/** Enough room for a comfortable clock pane and two real city-card columns. */
+internal fun useWideClockPages(width: Float, height: Float, fontScale: Float): Boolean =
+    width >= maxOf(720f, 2f * (132f * fontScale * 2f + 26f) + 56f) && height >= 520f
+
+/** A retained two-pane clock destination, with only its active functional pane accepting input. */
+@Composable
+internal fun WideClockPages(
+    worldSelected: Boolean,
+    clockOnly: Boolean = false,
+    panesOnly: Boolean = false,
+    clockProgress: (() -> Float)? = null,
+    cities: List<WorldCity>, selectedZoneId: String?,
+    onSelectCity: (WorldCity) -> Unit, onShowLocalTime: () -> Unit,
+    alarmContent: @Composable (Modifier) -> Unit,
+    showAlarmEditor: Boolean,
+    alarmEditor: @Composable () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val presentation = LocalWorldClockPresentation.current
+    val toggleScope = rememberCoroutineScope()
+    var toggleJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val locale = androidx.compose.ui.platform.LocalConfiguration.current.locales[0]
+    val now by rememberWallTicker()
+    val local = prettify(ZoneId.systemDefault().id).copy(region = "Local Time")
+    val selected = cities.firstOrNull { it.zone.id == selectedZoneId } ?: local
+    val clockCity = if (worldSelected) selected else local
+    val motion = remember { Animatable(if (worldSelected) 1f else 0f) }
+    LaunchedEffect(worldSelected) {
+        val target = if (worldSelected) 1f else 0f
+        if (motion.value == target && !motion.isRunning) return@LaunchedEffect
+        if (ValueAnimator.areAnimatorsEnabled())
+            motion.animateTo(target, spring(dampingRatio = 1f, stiffness = 300f, visibilityThreshold = .001f))
+        else motion.snapTo(target)
+    }
+    val scheme = MaterialTheme.colorScheme
+    val density = LocalDensity.current
+    val use24h = rememberSystem24HourFormat()
+    val scrollConnection = remember(worldSelected, clockOnly) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (!worldSelected || clockOnly || source != NestedScrollSource.UserInput) return Offset.Zero
+                if (available.y > 0f && presentation.grid.canScrollBackward) return Offset.Zero
+                toggleJob?.cancel()
+                val old = presentation.collapse.floatValue
+                val range = with(density) { 280.dp.toPx() }
+                presentation.collapse.floatValue = (old - available.y / range).coerceIn(0f, 1f)
+                return Offset(0f, (old - presentation.collapse.floatValue) * range)
+            }
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (!worldSelected || clockOnly || presentation.collapse.floatValue in listOf(0f, 1f)) return Velocity.Zero
+                val start = presentation.collapse.floatValue
+                androidx.compose.animation.core.animate(start, worldClockSnapTarget(start, -available.y / density.density),
+                    animationSpec = tween(260)) { value, _ -> presentation.collapse.floatValue = value }
+                return Velocity(0f, available.y)
+            }
+        }
+    }
+    BoxWithConstraints(modifier.nestedScroll(scrollConnection).fillMaxSize().then(if (clockOnly) Modifier else Modifier.worldClockAmbient(scheme.primary, scheme.surface.luminance() < .5f))) {
+        val pane = (maxWidth - 24.dp) / 2
+        val cityFadeBounds = remember(pane) { cityLightLayerOutsets((pane - 26.dp) / 2) }
+        val alarmFadeBounds = remember { LayerOutsets(32.dp) }
+        val dial = minOf(pane - 24.dp, maxHeight - 148.dp, 320.dp).coerceAtLeast(100.dp)
+        val top = ((maxHeight - dial - 124.dp) / 2).coerceAtLeast(8.dp)
+        val leftClock = (pane - dial) / 2
+        val rightClock = pane + 24.dp + leftClock
+        val editorVisible = showAlarmEditor && !worldSelected
+        val clockAlpha = animateFloatAsState(if (editorVisible) 0f else 1f, tween(200), label = "clockEditorVisibility")
+
+        // Pager destinations retain their own two-pane content. Do not leave an invisible
+        // outgoing pane over the clock: its touch blocker would swallow page swipes.
+        if (!clockOnly && !worldSelected) Box(Modifier.width(pane).fillMaxHeight().graphicsLayer {
+            outsets = alarmFadeBounds
+            alpha = (1f - motion.value * 1.65f).coerceIn(0f, 1f)
+            translationX = -24.dp.toPx() * motion.value
+        }.inactiveClockPane(worldSelected), contentAlignment = Alignment.TopCenter) {
+            alarmContent(Modifier.width(minOf(pane - 16.dp, 520.dp)).fillMaxHeight())
+        }
+        if (!clockOnly && worldSelected) Box(Modifier.offset(x = pane + 24.dp).width(pane).fillMaxHeight()
+            .graphicsLayer {
+                outsets = cityFadeBounds
+                // Each card and its halo share one staggered entrance below. A second
+                // pane fade compounds opacity and makes faint lighting arrive late.
+            }
+            .inactiveClockPane(!worldSelected), contentAlignment = Alignment.Center) {
+            SavedLocationGrid(cities = cities, localCity = local,
+                onShowLocalTime = onShowLocalTime, selectedZoneId = selectedZoneId,
+                nowUtcMillis = now, onSelectCity = onSelectCity,
+                state = LocalWorldClockPresentation.current.grid,
+                entranceVisible = worldSelected, centreShortContent = true, modifier = Modifier.fillMaxSize())
+        }
+        // No AnimatedContent or keys around the clock: the hands and second-hand frame source
+        // survive every Alarm/World switch, including interrupted position animations.
+        if (!panesOnly) {
+            Box(Modifier.offset {
+                IntOffset(with(density) { (rightClock + (leftClock - rightClock) * (clockProgress?.invoke() ?: motion.value)).roundToPx() },
+                    with(density) { top.roundToPx() })
+            }.size(dial).graphicsLayer { alpha = clockAlpha.value; outsets = LayerOutsets(dial * .4f); clip = false }
+                .then(if (editorVisible) Modifier.clearAndSetSemantics {} else Modifier)
+                .then(if (worldSelected) Modifier.draggable(
+                    orientation = Orientation.Vertical,
+                    state = rememberDraggableState { delta ->
+                        toggleJob?.cancel()
+                        presentation.collapse.floatValue = (presentation.collapse.floatValue - delta / with(density) { dial.toPx() }).coerceIn(0f, 1f)
+                    },
+                    onDragStopped = { velocity ->
+                        val start = presentation.collapse.floatValue
+                        toggleJob = toggleScope.launch {
+                            androidx.compose.animation.core.animate(start, worldClockSnapTarget(start, -velocity / density.density),
+                                animationSpec = tween(260)) { value, _ -> presentation.collapse.floatValue = value }
+                        }
+                    },
+                ).clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClickLabel = "Switch clock style") {
+                    toggleJob?.cancel()
+                    toggleJob = toggleScope.launch {
+                        val start = presentation.collapse.floatValue
+                        androidx.compose.animation.core.animate(start, if (start < .5f) 1f else 0f, animationSpec = tween(260)) { value, _ -> presentation.collapse.floatValue = value }
+                    }
+                } else Modifier), contentAlignment = Alignment.Center) {
+                WorldClockHeader(clockCity, now, dial,
+                    presentation.collapse.floatValue * (clockProgress?.invoke() ?: motion.value), showDetails = false)
+            }
+
+            Box(Modifier.offset {
+                IntOffset(with(density) { ((pane + 24.dp) * (1f - (clockProgress?.invoke() ?: motion.value))).roundToPx() },
+                    with(density) { (top + worldClockDetailsTop(dial, presentation.collapse.floatValue * (clockProgress?.invoke() ?: motion.value), use24h)).roundToPx() })
+            }.width(pane).graphicsLayer { alpha = clockAlpha.value }
+                .then(if (editorVisible) Modifier.clearAndSetSemantics {} else Modifier)) {
+                AnimatedContent(worldSelected, transitionSpec = {
+                    (fadeIn(tween(250, delayMillis = 100)) + slideInVertically(tween(250)) { it / 10 }) togetherWith
+                        fadeOut(tween(160))
+                }, label = "sharedClockDetails") { world ->
+                    Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        if (world) {
+                            MechanicalText(selected.city, WorldClockType.city(24.sp), scheme.onSurface,
+                                modifier = Modifier.fillMaxWidth(), selectionKey = selected.zone.id, progressiveBlur = true)
+                            val description = selected.timeAt(now).format(DateTimeFormatter.ofPattern("zzzz · EEE, d MMM", locale))
+                            WorldClockSubtitle(description)
+                        } else {
+                            val localTime = local.timeAt(now)
+                            val digits = localTime.format(DateTimeFormatter.ofPattern(if (use24h) "HH:mm:ss" else "hh:mm:ss"))
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                WorldClockDigitalReadout(digits, local.zone.id,
+                                    scheme.onSurface, scheme.primary, modifier = Modifier.weight(1f))
+                                if (!use24h) Text(localTime.format(DateTimeFormatter.ofPattern("a", locale)),
+                                    style = WorldClockType.secondary(14.sp), color = scheme.onSurface)
+                            }
+                            Text(local.timeAt(now).format(DateTimeFormatter.ofPattern("EEEE, d MMMM", locale)),
+                                style = MaterialTheme.typography.bodySmall, color = scheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+        if (!clockOnly && showAlarmEditor) Box(Modifier.offset(x = pane + 24.dp).width(pane).fillMaxHeight()
+            .graphicsLayer { alpha = if (editorVisible) 1f else 0f }
+            .inactiveClockPane(!editorVisible)) { alarmEditor() }
+    }
+}
+
+/** Invisible outgoing panes neither intercept touches nor expose duplicate accessibility content. */
+private fun Modifier.inactiveClockPane(inactive: Boolean): Modifier = if (!inactive) this else
+    clearAndSetSemantics {}.pointerInput(Unit) {
+        awaitPointerEventScope {
+            while (true) awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
+        }
+    }
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/screens/Winder.kt`
+
+```kotlin
+package app.expressiveclock.ui.screens
+
+import androidx.compose.animation.core.animate
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
+import kotlinx.coroutines.launch
+
+/**
+ * A spring-wound timer's dial: the disc seen **edge-on**, wearing M3 Expressive's slider anatomy.
+ *
+ * ## The drum
+ *
+ * A stepped slider was the wrong shape for this. A pomodoro timer is a knurled wheel you turn, and
+ * what sells a wheel on a flat screen is perspective: graduations sit at equal angles *around* a
+ * cylinder and are then projected, `x = centre + R·sin θ`, which bunches them toward the rim the
+ * way a real drum's do. Depth is `cos θ`, and it drives **width and brightness**: the graduation
+ * under the handle is thickest and brightest, and the rest thin and dim until they cross the
+ * silhouette at ±90°. Height stays constant across the whole face: shortening them with distance
+ * as well was tried and read as a ruler with a curve drawn on it.
+ *
+ * ## Why it now looks like Material
+ *
+ * The first version was a bespoke drawing that happened to sit in a Material app. This one borrows
+ * the expressive **slider's** anatomy, measured off the concept's own audio player. The drum body
+ * *is* the track, in `surfaceContainerHighest`, at an 18 dp radius rather than a full capsule,
+ * because a capsule reads as a pill and this is meant to read as a drum.
+ *
+ * There is no separate handle. The graduation passing under the centre *becomes* the marker and
+ * hands the role back as it leaves, so nothing appears or disappears.
+ *
+ * There is deliberately no "wound so far" fill. It was tried and it read as a separate chip stuck
+ * to the left end: a drum's position is shown by which graduation is under the handle, not by how
+ * much of a track is coloured.
+ *
+ * ## Snap and smoothness
+ *
+ * The drag accumulates in a float and the drawing follows that float, not the rounded value. The
+ * earlier version snapped, and the cause was its own re-sync: it reset `pos` from the incoming
+ * `value` whenever the two drifted by more than three-quarters of a unit, which during a drag is
+ * constantly. Every emitted step therefore yanked the drum back onto a whole number. Now an
+ * incoming value this control just emitted is recognised as its own echo and ignored; only a
+ * genuinely external change re-seats the drum.
+ */
+@Composable
+fun Winder(
+    value: Int,
+    range: IntRange,
+    onValueChange: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+    height: Dp = 76.dp,
+    /**
+     * Angle between adjacent graduations. At ~4.6° roughly forty are visible across the face,
+     * which is what makes it read as knurling rather than as a ruler.
+     */
+    stepRadians: Float = 0.080f,
+    majorEvery: Int = 5,
+) {
+    val snapSpec = MaterialTheme.motionScheme.fastSpatialSpec<Float>()
+    val scope = rememberCoroutineScope()
+    val accent = MaterialTheme.colorScheme.primary
+    val ridge = MaterialTheme.colorScheme.onSurfaceVariant
+    val track = MaterialTheme.colorScheme.surfaceContainerHighest
+    val onChange by rememberUpdatedState(onValueChange)
+
+    var pos by remember { mutableFloatStateOf(value.toFloat()) }
+    // What this control last reported. An incoming `value` equal to it is our own echo.
+    var emitted by remember { mutableIntStateOf(value) }
+    if (value != emitted && abs(pos - value) > 0.5f) {
+        pos = value.toFloat()
+        emitted = value
+    }
+
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(height)
+            .semantics {
+                contentDescription = "Winder"
+                progressBarRangeInfo = ProgressBarRangeInfo(
+                    current = value.toFloat(),
+                    range = range.first.toFloat()..range.last.toFloat(),
+                    steps = range.last - range.first,
+                )
+            }
+            .pointerInput(range) {
+                detectHorizontalDragGestures(
+                    // Snap. Let go between two graduations and the drum settles onto the nearer
+                    // one rather than resting off-detent, which is what a real wound dial does
+                    // and what makes the value under the marker trustworthy.
+                    //
+                    // Animated rather than assigned, on the expressive *fast spatial* spring:
+                    // under-damped, so it overshoots a hair and comes back, the way a sprung
+                    // mechanism would. Jumping the value would land in the right place and feel
+                    // like nothing happened.
+                    onDragEnd = {
+                        val target = pos.roundToInt()
+                            .coerceIn(range.first, range.last)
+                            .toFloat()
+                        scope.launch {
+                            animate(initialValue = pos, targetValue = target, animationSpec = snapSpec) { v, _ ->
+                                pos = v
+                            }
+                        }
+                        if (pos.roundToInt() != emitted) {
+                            emitted = pos.roundToInt()
+                            onChange(emitted)
+                        }
+                    },
+                ) { change, dx ->
+                    change.consume()
+                    // Radius comes from the drawn width, so a pixel of drag turns the drum by
+                    // dx/R radians and finger and graduations travel together.
+                    //
+                    // Negated: the drum is a cylinder seen edge-on, so dragging *left* rolls its
+                    // near face away from you and brings higher numbers up under the marker. That
+                    // is the same direction a physical wound timer turns. Following the finger
+                    // instead means pulling left counts down, which reads backwards on a dial.
+                    val delta = -(dx / (size.width / 2f)) / stepRadians
+                    pos = (pos + delta).coerceIn(range.first.toFloat(), range.last.toFloat())
+                    val rounded = pos.roundToInt()
+                    if (rounded != emitted) {
+                        emitted = rounded
+                        onChange(rounded)
+                    }
+                }
+            },
+    ) {
+        val cx = size.width / 2f
+        val cy = size.height / 2f
+        val r = size.width / 2f
+        val trackH = size.height
+        val corner = 18.dp.toPx()
+        val ridgeLen = trackH * 0.68f
+
+        // Squarer than a stock slider: a fully-rounded capsule reads as a pill, and this is a
+        // drum. 18 dp keeps it in the M3 shape scale without pretending to be a capsule.
+        drawRoundRect(
+            color = track,
+            topLeft = Offset(0f, cy - trackH / 2f),
+            size = Size(size.width, trackH),
+            cornerRadius = CornerRadius(corner),
+        )
+        val halfTurn = (PI / 2 / stepRadians).toInt()
+        // How near a graduation has to come before it starts turning into the marker. Wider than
+        // one step, so two neighbours always share the transition and the handoff is continuous.
+        val selectRange = stepRadians * 1.6f
+
+        for (i in -halfTurn..halfTurn) {
+            val unit = pos.roundToInt() + i
+            val theta = (unit - pos) * stepRadians
+            val depth = cos(theta)
+            if (depth <= 0.02f) continue
+
+            val x = cx + r * sin(theta)
+            val inRange = unit >= range.first && unit <= range.last
+            val major = unit % majorEvery == 0 && inRange
+
+            // Selection, smoothstepped on angular distance from the centre. There is no separate
+            // handle: the graduation passing under the middle *becomes* the marker (growing,
+            // thickening and taking the accent colour) and hands the role to its neighbour on the
+            // way out. The previous version drew a fixed bar and skipped any graduation near it,
+            // which is why they blinked out of existence as they approached.
+            val t = (1f - (abs(theta) / selectRange)).coerceIn(0f, 1f)
+            val sel = t * t * (3f - 2f * t)
+
+            val baseAlpha = ((if (major) 0.34f else 0.14f) + 0.66f * depth * depth) *
+                (if (inRange) 1f else 0.22f)
+            val h = ridgeLen * (1f + 0.22f * sel)
+            val w = (6.4f * (0.26f + 0.74f * depth)) * (1f + 1.05f * sel)
+            val color = lerp(
+                (if (major) accent else ridge).copy(alpha = baseAlpha.coerceIn(0f, 1f)),
+                accent,
+                sel,
+            )
+
+            drawLine(
+                color = color,
+                start = Offset(x, cy - h / 2f),
+                end = Offset(x, cy + h / 2f),
+                strokeWidth = w,
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/screens/WorldClockSnap.kt`
+
+```kotlin
+package app.expressiveclock.ui.screens
+
+internal data class WorldClockHeaderVisibility(val analogue: Float, val digital: Float)
+
+/** Pure scroll-derived handover: no independent alpha animations can outlive a reversal. */
+internal fun worldClockHeaderVisibility(progress: Float): WorldClockHeaderVisibility {
+    val collapse = progress.coerceIn(0f, 1f)
+    return WorldClockHeaderVisibility(
+        analogue = (1f - collapse / .45f).coerceIn(0f, 1f),
+        digital = ((collapse - .55f) / .45f).coerceIn(0f, 1f),
+    )
+}
+
+/** Velocity is in dp/s, positive toward collapse. Slow releases use the halfway threshold. */
+internal fun worldClockSnapTarget(progress: Float, velocity: Float): Float = when {
+    progress <= 0f -> 0f
+    progress >= 1f -> 1f
+    velocity >= 600f -> 1f
+    velocity <= -600f -> 0f
+    progress >= .5f -> 1f
+    else -> 0f
+}
+```
