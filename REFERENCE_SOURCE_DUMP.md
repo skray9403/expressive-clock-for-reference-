@@ -2244,3 +2244,1012 @@ object OverlayManager {
     }
 }
 ```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/ClockDock.kt`
+
+```kotlin
+package app.expressiveclock.ui
+
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.IntOffset
+
+/**
+ * Fixed-stage dock. The add button never changes the measured width of the stage, so moving from
+ * Alarms to another tab cannot make the dock jump/stutter. Instead the dock and add button animate
+ * within the same centered stage.
+ */
+@Composable
+fun ClockDock(
+    destinations: List<Tab>,
+    selected: Tab,
+    onSelect: (Tab) -> Unit,
+    showAdd: Boolean,
+    addLabel: String,
+    onAdd: () -> Unit,
+    modifier: Modifier = Modifier,
+    enableGlow: Boolean = true,
+    pagePosition: (() -> Float)? = null,
+) {
+    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val blue = MaterialTheme.colorScheme.primary
+    val dockTint = if (dark) MaterialTheme.colorScheme.surfaceContainer.copy(alpha = .88f) else MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = .84f)
+
+    val addAlpha by animateFloatAsState(
+        targetValue = if (showAdd) 1f else 0f,
+        animationSpec = tween(180),
+        label = "addAlpha",
+    )
+    val addScale by animateFloatAsState(
+        targetValue = if (showAdd) 1f else .78f,
+        animationSpec = spring(dampingRatio = 0.9f, stiffness = 620f),
+        label = "addScale",
+    )
+
+    BoxWithConstraints(
+        modifier = modifier.widthIn(max = DOCK_STAGE_WIDTH + 16.dp).fillMaxWidth().padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        val addSize = minOf(DOCK_HEIGHT, (maxWidth - 218.dp).coerceAtLeast(48.dp))
+        val dockWidth = minOf(DOCK_WIDTH, (maxWidth - addSize - FAB_GAP).coerceAtLeast(0.dp))
+        val dockShift by animateDpAsState(
+            targetValue = if (showAdd) 0.dp else (addSize + FAB_GAP) / 2,
+            animationSpec = spring(dampingRatio = 0.86f, stiffness = 560f),
+            label = "dockShift",
+        )
+
+        Row(
+            modifier = Modifier
+                .width(dockWidth + FAB_GAP + addSize)
+                .padding(horizontal = 0.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(FAB_GAP),
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(dockWidth)
+                    .height(DOCK_HEIGHT)
+                    .graphicsLayer { translationX = dockShift.toPx() }
+                    .luminousElasticClickable(
+                        shape = RoundedCornerShape(DOCK_HEIGHT / 2),
+                        maxStretchPercent = 0.06f,
+                        maxTranslateDp = 1.8.dp,
+                    )
+                    .glass(
+                        RoundedCornerShape(DOCK_HEIGHT / 2),
+                        dockTint,
+                        .88f,
+                        shadowElevation = if (enableGlow) 18.dp else 0.dp,
+                    )
+                    .then(if (enableGlow) Modifier.blueGlow(RoundedCornerShape(DOCK_HEIGHT / 2)) else Modifier),
+                contentAlignment = Alignment.Center,
+            ) {
+                BoxWithConstraints(Modifier.fillMaxSize().padding(horizontal = 8.dp)) {
+                    val selectedIndex = destinations.indexOf(selected).coerceAtLeast(0)
+                    val itemWidth = maxWidth / destinations.size
+                    val indicatorSize = minOf(50.dp, ((dockWidth - 16.dp) / 4 - 4.dp).coerceAtLeast(28.dp))
+                    val selectedOffset = if (pagePosition == null) animateDpAsState(
+                        targetValue = itemWidth * selectedIndex + (itemWidth - indicatorSize) / 2,
+                        animationSpec = spring(dampingRatio = 0.84f, stiffness = 600f),
+                        label = "dockIndicator",
+                    ) else null
+                    Box(
+                        modifier = Modifier
+                            .offset {
+                                // Read continuous pager progress during placement, not
+                                // composition. No extra spring trails the user's finger.
+                                val position = pagePosition?.invoke()?.coerceIn(0f, destinations.lastIndex.toFloat())
+                                val x = if (position == null) selectedOffset!!.value
+                                    else itemWidth * position + (itemWidth - indicatorSize) / 2
+                                IntOffset(x.roundToPx(), ((DOCK_HEIGHT - indicatorSize) / 2).roundToPx())
+                            }
+                            .size(indicatorSize)
+                            .clip(CircleShape)
+                            .background(
+                                if (dark) Color(0xFF24303B) else Color.White.copy(alpha = .99f)
+                            ),
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxSize(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        destinations.forEach { d ->
+                            DockItem(
+                                tab = d,
+                                selected = d == selected,
+                                iconColor = if (dark) Color.White.copy(alpha = .94f) else blue,
+                                onClick = { onSelect(d) },
+                            )
+                        }
+                    }
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .size(addSize)
+                    .graphicsLayer {
+                        alpha = addAlpha
+                        scaleX = addScale
+                        scaleY = addScale
+                    }
+                    .luminousElasticClickable(
+                        enabled = showAdd,
+                        shape = CircleShape,
+                        maxStretchPercent = 0.08f,
+                        maxTranslateDp = 2.0.dp,
+                        onClick = onAdd,
+                    )
+                    .clip(CircleShape)
+                    .glass(
+                        CircleShape,
+                        if (dark) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .72f)
+                        else MaterialTheme.colorScheme.primaryContainer.copy(alpha = .58f),
+                        .92f,
+                        shadowElevation = if (enableGlow) 18.dp else 0.dp,
+                    )
+                    .then(if (enableGlow) Modifier.blueGlow(CircleShape) else Modifier)
+                    .clearAndSetSemantics {
+                        if (showAdd) {
+                            contentDescription = addLabel
+                            role = Role.Button
+                            onClick(label = addLabel) { onAdd(); true }
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.Rounded.Add, contentDescription = null, tint = MaterialTheme.colorScheme.onPrimaryContainer, modifier = Modifier.size(31.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun RowScope.DockItem(tab: Tab, selected: Boolean, iconColor: Color, onClick: () -> Unit) {
+    var tapCount by remember { mutableIntStateOf(0) }
+    var previouslySelected by remember { mutableStateOf(selected) }
+    // A swipe selects a destination without invoking onClick. Use the same icon
+    // animation for every new selection, without playing it on initial composition.
+    LaunchedEffect(selected) {
+        if (selected && !previouslySelected) tapCount++
+        previouslySelected = selected
+    }
+    val rotation = remember { Animatable(0f) }
+    val selectedScale by animateFloatAsState(
+        targetValue = if (selected) 1f else .94f,
+        animationSpec = tween(180),
+        label = "dockScale",
+    )
+
+    LaunchedEffect(tapCount) {
+        if (tapCount == 0) return@LaunchedEffect
+        if (tab == Tab.TIMERS) {
+            if (android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                val target = ((rotation.value / 180f).toInt() + 1) * 180f
+                rotation.animateTo(target, tween(320))
+            }
+            rotation.snapTo(0f)
+            return@LaunchedEffect
+        }
+        if (tab == Tab.WORLD || tab == Tab.STOPWATCH) {
+            if (android.animation.ValueAnimator.areAnimatorsEnabled()) {
+                val target = ((rotation.value / 360f).toInt() + 1) * 360f
+                rotation.animateTo(target, tween(if (tab == Tab.WORLD) 600 else 420,
+                    easing = androidx.compose.animation.core.FastOutSlowInEasing))
+            }
+            rotation.snapTo(0f)
+            return@LaunchedEffect
+        }
+        rotation.snapTo(0f)
+        when (tab) {
+            Tab.ALARMS -> {
+                rotation.animateTo(-5f, tween(65))
+                rotation.animateTo(5f, tween(85))
+                rotation.animateTo(-3f, tween(65))
+                rotation.animateTo(0f, tween(65))
+            }
+            Tab.WORLD -> Unit
+            Tab.TIMERS -> Unit
+            Tab.STOPWATCH -> Unit
+        }
+        rotation.snapTo(0f)
+    }
+
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .height(DOCK_HEIGHT)
+            .selectable(
+                selected = selected,
+                role = Role.Tab,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {
+                    // New selections animate via selected above. A repeated tap
+                    // still replays the animation without double-triggering a new tab.
+                    if (selected) tapCount++
+                    onClick()
+                },
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (tab == Tab.WORLD) {
+            RotatingGlobe(
+                phase = { rotation.value },
+                tint = if (selected) MaterialTheme.colorScheme.onSurface else iconColor,
+                modifier = Modifier.size(27.dp).graphicsLayer { scaleX = selectedScale; scaleY = selectedScale }
+                    .clearAndSetSemantics { contentDescription = tab.label },
+            )
+        } else if (tab == Tab.STOPWATCH) {
+            StopwatchDockIcon(
+                phase = { rotation.value },
+                tint = if (selected) MaterialTheme.colorScheme.onSurface else iconColor,
+                modifier = Modifier.size(27.dp).graphicsLayer { scaleX = selectedScale; scaleY = selectedScale }
+                    .clearAndSetSemantics { contentDescription = tab.label },
+            )
+        } else {
+        Icon(
+            imageVector = tab.icon,
+            contentDescription = tab.label,
+            tint = if (selected) MaterialTheme.colorScheme.onSurface else iconColor,
+            modifier = Modifier
+                .size(27.dp)
+                .graphicsLayer {
+                    scaleX = selectedScale
+                    scaleY = selectedScale
+                    when (tab) {
+                        Tab.WORLD -> rotationZ = rotation.value
+                        Tab.ALARMS -> rotationZ = rotation.value
+                        Tab.TIMERS -> rotationZ = rotation.value
+                        Tab.STOPWATCH -> Unit
+                    }
+                    cameraDistance = 18f * density
+                },
+        )
+        }
+    }
+}
+
+val DOCK_HEIGHT = 72.dp
+private val DOCK_WIDTH = 252.dp
+private val FAB_GAP = 10.dp
+private val DOCK_STAGE_WIDTH = DOCK_WIDTH + FAB_GAP + DOCK_HEIGHT
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/Glass.kt`
+
+```kotlin
+package app.expressiveclock.ui
+
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.Outline
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import kotlin.math.abs
+
+/** Clean white canvas for the glass treatment. Colour comes from subtle blue light, not a gradient page. */
+@Composable
+fun GlassBackdrop(modifier: Modifier = Modifier, content: @Composable BoxScope.() -> Unit) {
+    Box(modifier = modifier.background(androidx.compose.material3.MaterialTheme.colorScheme.background)) { content() }
+}
+
+/**
+ * A restrained glass surface for a white canvas: translucent white, a cool blue inner sheen and a
+ * bright edge. The shadow is intentionally soft enough to read as light passing through glass.
+ */
+@Composable
+fun Modifier.glass(
+    shape: Shape = RoundedCornerShape(28.dp),
+    tint: Color = Color.White.copy(alpha = .88f),
+    borderAlpha: Float = .82f,
+    accent: Color? = null,
+    shadowElevation: Dp = 14.dp,
+): Modifier {
+    val isDark = tint.luminance() < .5f
+    val resolvedAccent = accent ?: MaterialTheme.colorScheme.primary
+    val shadow = if (shadowElevation > 0.dp) {
+        Modifier.shadow(
+            elevation = shadowElevation,
+            shape = shape,
+            ambientColor = if (isDark) Color.Black.copy(alpha = .50f) else resolvedAccent.copy(alpha = .12f),
+            spotColor = if (isDark) Color.Black.copy(alpha = .70f) else resolvedAccent.copy(alpha = .22f),
+        )
+    } else {
+        Modifier
+    }
+    return this
+    .then(shadow)
+    .background(
+        Brush.linearGradient(
+            colors = if (isDark) {
+                listOf(
+                    tint.copy(alpha = .94f),
+                    tint.copy(alpha = .88f),
+                    tint.copy(alpha = .84f),
+                )
+            } else {
+                listOf(
+                    tint.copy(alpha = .96f),
+                    tint.copy(alpha = .88f),
+                    tint.copy(alpha = .82f),
+                )
+            },
+            start = Offset(0f, 0f),
+            end = Offset(600f, 600f),
+        ),
+        shape,
+    )
+    .border(1.25.dp, if (isDark) Color.White.copy(alpha = .14f) else Color.White.copy(alpha = borderAlpha), shape)
+}
+
+/**
+ * A controllable blue drop shadow for large circular surfaces. This deliberately avoids
+ * RenderNode elevation because very large colored shadows can be rasterized with a faceted
+ * outline on some Android devices. A radial field lives in a larger parent box, so the shadow
+ * cannot be clipped by the circle itself.
+ */
+@Composable
+fun FloatingCircle(
+    size: androidx.compose.ui.unit.Dp,
+    modifier: Modifier = Modifier,
+    fill: Color,
+    border: Color = Color.White.copy(alpha = .82f),
+    shadowColor: Color = Color(0xFF1687D0),
+    content: @Composable BoxScope.() -> Unit,
+) {
+    Box(
+        modifier = modifier.size(size + 72.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) {
+            val cx = this.size.width / 2f
+            val cy = this.size.height / 2f + 12.dp.toPx()
+            val r = this.size.width * .48f
+            drawCircle(
+                brush = Brush.radialGradient(
+                    colors = listOf(
+                        shadowColor.copy(alpha = .30f),
+                        shadowColor.copy(alpha = .14f),
+                        Color.Transparent,
+                    ),
+                    center = Offset(cx, cy),
+                    radius = r + 28.dp.toPx(),
+                ),
+                radius = r + 28.dp.toPx(),
+                center = Offset(cx, cy),
+            )
+        }
+        Box(
+            modifier = Modifier
+                .size(size)
+                .background(fill, androidx.compose.foundation.shape.CircleShape)
+                .border(1.25.dp, border, androidx.compose.foundation.shape.CircleShape),
+            content = content,
+        )
+    }
+}
+
+/** A small theme-coloured drop shadow beneath floating controls. */
+@Composable
+fun Modifier.blueGlow(
+    shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(32.dp),
+    color: Color = androidx.compose.material3.MaterialTheme.colorScheme.primary,
+): Modifier = this.shadow(
+    elevation = 34.dp,
+    shape = shape,
+    clip = false,
+    ambientColor = color.copy(alpha = .24f),
+    spotColor = color.copy(alpha = .40f),
+)
+
+/** A subtle elastic press response for interactive UI. */
+@Composable
+fun Modifier.elasticClickable(
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+): Modifier {
+    return this.luminousElasticClickable(
+        enabled = enabled,
+        shape = CircleShape,
+        onClick = onClick,
+    )
+}
+
+/**
+ * An expressive, touch-reactive interaction modifier providing:
+ * - Touch-originated radial ripple
+ * - Finger-following luminous highlight
+ * - One-sided directional elastic deformation
+ * - Whole-component physical translation with spring release overshoot
+ * - Hard platform/GPU offscreen layer clipping
+ */
+@Composable
+fun Modifier.luminousElasticClickable(
+    enabled: Boolean = true,
+    shape: Shape = CircleShape,
+    maxStretchPercent: Float = 0.092f,
+    maxTranslateDp: Dp = 2.6.dp,
+    luminousRadiusScale: Float = 1.0f,
+    onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
+): Modifier {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isInteractionPressed by interactionSource.collectIsPressedAsState()
+    val scope = rememberCoroutineScope()
+
+    var rawTouchPosition by remember { mutableStateOf<Offset?>(null) }
+    var lastTouchPosition by remember { mutableStateOf<Offset?>(null) }
+    var lastRippleOrigin by remember { mutableStateOf<Offset?>(null) }
+    val rippleProgress = remember { Animatable(1f) }
+
+    var targetDx by remember { mutableFloatStateOf(0f) }
+    var targetDy by remember { mutableFloatStateOf(0f) }
+
+    // Active press state derived from either pointer touch or interaction source
+    val isPressed = rawTouchPosition != null || isInteractionPressed
+
+    val animatedDx by animateFloatAsState(
+        targetValue = targetDx,
+        animationSpec = if (isPressed) {
+            spring(
+                stiffness = 550f,
+                dampingRatio = 0.82f,
+            )
+        } else {
+            spring(
+                stiffness = 350f,
+                dampingRatio = 0.52f,
+            )
+        },
+        label = "elasticDx",
+    )
+
+    val animatedDy by animateFloatAsState(
+        targetValue = targetDy,
+        animationSpec = if (isPressed) {
+            spring(
+                stiffness = 550f,
+                dampingRatio = 0.82f,
+            )
+        } else {
+            spring(
+                stiffness = 350f,
+                dampingRatio = 0.52f,
+            )
+        },
+        label = "elasticDy",
+    )
+
+    val animatedScale by animateFloatAsState(
+        targetValue = if (isPressed) 0.95f else 1.0f,
+        animationSpec = if (isPressed) {
+            tween(durationMillis = 90, easing = FastOutSlowInEasing)
+        } else {
+            spring(
+                stiffness = 420f,
+                dampingRatio = 0.62f,
+            )
+        },
+        label = "luminousElasticScale",
+    )
+
+    val luminousAlpha by animateFloatAsState(
+        targetValue = if (isPressed) 1.0f else 0.0f,
+        animationSpec = if (isPressed) {
+            tween(durationMillis = 120, easing = FastOutSlowInEasing)
+        } else {
+            tween(durationMillis = 260, easing = FastOutSlowInEasing)
+        },
+        label = "luminousAlpha",
+    )
+
+    val surfaceLuminance = MaterialTheme.colorScheme.surface.luminance()
+    val isDarkTheme = surfaceLuminance < 0.5f
+    val primaryColor = MaterialTheme.colorScheme.primary
+
+    // Vibrant, rich theme-adaptive luminous bloom colors:
+    val centerColor = if (isDarkTheme) {
+        Color.White.copy(alpha = 0.48f * luminousAlpha)
+    } else {
+        primaryColor.copy(alpha = 0.28f * luminousAlpha)
+    }
+
+    val outerColor = if (isDarkTheme) {
+        Color(0xFF80D8FF).copy(alpha = 0.22f * luminousAlpha)
+    } else {
+        primaryColor.copy(alpha = 0.11f * luminousAlpha)
+    }
+
+    var mod = this.pointerInput(enabled) {
+        if (!enabled) return@pointerInput
+        awaitPointerEventScope {
+            while (true) {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                val change = event.changes.firstOrNull()
+                if (change != null) {
+                    if (change.pressed) {
+                        val pos = change.position
+                        val cx = size.width / 2f
+                        val cy = size.height / 2f
+                        if (rawTouchPosition == null) {
+                            lastRippleOrigin = pos
+                            scope.launch {
+                                rippleProgress.snapTo(0f)
+                                rippleProgress.animateTo(
+                                    targetValue = 1f,
+                                    animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+                                )
+                            }
+                        }
+                        rawTouchPosition = pos
+                        lastTouchPosition = pos
+                        if (cx > 0f && cy > 0f) {
+                            targetDx = ((pos.x - cx) / cx).coerceIn(-1f, 1f)
+                            targetDy = ((pos.y - cy) / cy).coerceIn(-1f, 1f)
+                        }
+                    } else {
+                        rawTouchPosition = null
+                        targetDx = 0f
+                        targetDy = 0f
+                    }
+                }
+            }
+        }
+    }
+
+    mod = mod
+        .graphicsLayer {
+            val maxTranslatePx = maxTranslateDp.toPx()
+            val stretchX = 1f + maxStretchPercent * abs(animatedDx) - 0.03f * abs(animatedDy)
+            val stretchY = 1f + (maxStretchPercent * 1.06f) * abs(animatedDy) - 0.03f * abs(animatedDx)
+            val netScaleX = animatedScale * stretchX
+            val netScaleY = animatedScale * stretchY
+
+            val pivotX = (0.5f - 0.30f * animatedDx).coerceIn(0.15f, 0.85f)
+            val pivotY = (0.5f - 0.30f * animatedDy).coerceIn(0.15f, 0.85f)
+            transformOrigin = TransformOrigin(pivotX, pivotY)
+
+            scaleX = netScaleX
+            scaleY = netScaleY
+            translationX = animatedDx * maxTranslatePx
+            translationY = animatedDy * maxTranslatePx
+            clip = true
+            this.shape = shape
+            compositingStrategy = CompositingStrategy.Offscreen
+        }
+        .clip(shape)
+        .drawWithContent {
+            drawContent()
+
+            val w = size.width
+            val h = size.height
+            val currentTouchCenter = rawTouchPosition ?: lastTouchPosition ?: Offset(w / 2f, h / 2f)
+
+            if (luminousAlpha > 0.01f) {
+                val baseBloomRadius = if (isDarkTheme) {
+                    size.maxDimension * 0.75f
+                } else {
+                    size.minDimension * 1.15f + size.maxDimension * 0.22f
+                }
+                val bloomRadius = baseBloomRadius * luminousRadiusScale
+
+                val luminousBrush = if (isDarkTheme) {
+                    Brush.radialGradient(
+                        colors = listOf(
+                            centerColor,
+                            outerColor,
+                            Color.Transparent,
+                        ),
+                        center = currentTouchCenter,
+                        radius = bloomRadius,
+                    )
+                } else {
+                    Brush.radialGradient(
+                        colorStops = arrayOf(
+                            0.00f to centerColor,
+                            0.38f to primaryColor.copy(alpha = 0.15f * luminousAlpha),
+                            0.72f to outerColor.copy(alpha = 0.04f * luminousAlpha),
+                            1.00f to Color.Transparent,
+                        ),
+                        center = currentTouchCenter,
+                        radius = bloomRadius,
+                    )
+                }
+                when (val outline = shape.createOutline(size, layoutDirection, this)) {
+                    is Outline.Rounded -> drawRoundRect(
+                        brush = luminousBrush,
+                        cornerRadius = outline.roundRect.topLeftCornerRadius,
+                    )
+                    is Outline.Generic -> drawPath(
+                        path = outline.path,
+                        brush = luminousBrush,
+                    )
+                    is Outline.Rectangle -> drawRect(
+                        brush = luminousBrush,
+                    )
+                }
+            }
+
+            val p = rippleProgress.value
+            val rippleAlpha = (1f - p) * (if (isPressed) 1f else luminousAlpha)
+            if (p < 1f && rippleAlpha > 0.01f && lastRippleOrigin != null) {
+                val maxRippleRadius = size.maxDimension * 0.90f
+                val minRippleRadius = 12.dp.toPx()
+                val currentRippleRadius = minRippleRadius + (maxRippleRadius - minRippleRadius) * p
+                val rippleOrigin = Offset(
+                    lastRippleOrigin!!.x.coerceIn(0f, w),
+                    lastRippleOrigin!!.y.coerceIn(0f, h),
+                )
+
+                val rippleBrush = Brush.radialGradient(
+                    colors = listOf(
+                        centerColor.copy(alpha = centerColor.alpha * 0.85f * rippleAlpha),
+                        outerColor.copy(alpha = outerColor.alpha * 0.45f * rippleAlpha),
+                        Color.Transparent,
+                    ),
+                    center = rippleOrigin,
+                    radius = currentRippleRadius,
+                )
+                when (val outline = shape.createOutline(size, layoutDirection, this)) {
+                    is Outline.Rounded -> drawRoundRect(
+                        brush = rippleBrush,
+                        cornerRadius = outline.roundRect.topLeftCornerRadius,
+                    )
+                    is Outline.Generic -> drawPath(
+                        path = outline.path,
+                        brush = rippleBrush,
+                    )
+                    is Outline.Rectangle -> drawRect(
+                        brush = rippleBrush,
+                    )
+                }
+            }
+        }
+
+    return if (onClick != null) {
+        mod.combinedClickable(
+            enabled = enabled,
+            interactionSource = interactionSource,
+            indication = null,
+            onClick = onClick,
+            onLongClick = onLongClick,
+        )
+    } else {
+        mod
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/MechanicalText.kt`
+
+```kotlin
+package app.expressiveclock.ui
+
+import android.animation.ValueAnimator
+import androidx.compose.animation.*
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Canvas
+import androidx.compose.material3.Text
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.BlurredEdgeTreatment
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import java.text.BreakIterator
+import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.min
+
+private data class MechanicalGlyph(val text: String, val index: Int, val glyph: String)
+
+/** Grapheme cells preserve spaces, accents and supplementary characters. */
+internal fun mechanicalCells(text: String): List<String> {
+    val iterator = BreakIterator.getCharacterInstance(Locale.ROOT).apply { setText(text) }
+    return buildList {
+        var start = iterator.first()
+        var end = iterator.next()
+        while (end != BreakIterator.DONE) {
+            add(text.substring(start, end)); start = end; end = iterator.next()
+        }
+    }
+}
+
+internal fun mechanicalChanges(previous: String, next: String): List<Int> {
+    val old = mechanicalCells(previous)
+    val updated = mechanicalCells(next)
+    return updated.indices.filter { updated[it] != old.getOrNull(it) }
+}
+
+internal fun mechanicalStagger(index: Int, selection: Boolean): Int =
+    (index * if (selection) 22 else 18).coerceAtMost(if (selection) 180 else 72)
+
+/** Fixed outer bounds and smoothly positioned cells prevent name-length changes from jumping. */
+@Composable
+internal fun MechanicalText(
+    text: String, style: TextStyle, color: Color, modifier: Modifier = Modifier,
+    digits: Boolean = false, selectionOnly: Boolean = false, selectionKey: Any = text, active: Boolean = true,
+    progressiveBlur: Boolean = false,
+    colorAt: (Int) -> Color = { color },
+) {
+    val density = LocalDensity.current
+    val measurer = rememberTextMeasurer()
+    val cells = remember(text) { mechanicalCells(text) }
+    var previousText by remember { mutableStateOf(text) }
+    var previousKey by remember { mutableStateOf(selectionKey) }
+    var retainedCount by remember { mutableIntStateOf(cells.size) }
+    val previousCells = remember(previousText) { mechanicalCells(previousText) }
+    val selection = remember(text) { previousKey != selectionKey || !digits }
+    val changed = remember(text) { mechanicalChanges(previousText, text) }
+    SideEffect { previousText = text; previousKey = selectionKey; retainedCount = maxOf(retainedCount, cells.size) }
+    val animate = active && ValueAnimator.areAnimatorsEnabled()
+    val viewportHeight = with(density) { (style.lineHeight.takeIf { it.value.isFinite() } ?: style.fontSize * 1.3f).toDp() }
+    BoxWithConstraints(modifier.height(viewportHeight)
+        .clearAndSetSemantics { contentDescription = text }) {
+        // Paragraph caret advances preserve kerning and actual word spaces. Measuring each
+        // letter (or a space's ink box) separately can collapse spaces and crowd narrow glyphs.
+        val rawWidth = measurer.measure(text, style).size.width.toFloat()
+        val fit = minOf(1f, with(density) { maxWidth.toPx() } / rawWidth.coerceAtLeast(1f))
+        val fitted = style.copy(fontSize = style.fontSize * fit, lineHeight = style.lineHeight * fit)
+        if (!animate) {
+            Text(buildAnnotatedString { cells.forEachIndexed { i, char -> withStyle(SpanStyle(color = colorAt(i))) { append(char) } } }, style = fitted, color = color, maxLines = 1,
+                modifier = Modifier.align(Alignment.Center))
+        } else {
+            val digitWidth = (0..9).maxOf { measurer.measure(it.toString(), fitted).size.width }.toFloat()
+            val paragraph = measurer.measure(text, fitted)
+            var offset = 0
+            val widths = cells.map { glyph ->
+                val start = paragraph.getHorizontalPosition(offset, usePrimaryDirection = true)
+                offset += glyph.length
+                val end = paragraph.getHorizontalPosition(offset, usePrimaryDirection = true)
+                if (digits && glyph.firstOrNull()?.isDigit() == true) digitWidth else abs(end - start)
+            }
+            val fullWidth = widths.sum()
+            val measuredCellWidth = maxOf(digitWidth, (cells + previousCells + "W").maxOfOrNull {
+                measurer.measure(it, fitted).size.width.toFloat()
+            } ?: 1f)
+            var widestCell by remember(fitted) { mutableFloatStateOf(measuredCellWidth) }
+            val cellWidth = maxOf(widestCell, measuredCellWidth)
+            SideEffect { widestCell = cellWidth }
+            repeat(maxOf(retainedCount, cells.size)) { index ->
+                val char = cells.getOrElse(index) { " " }
+                // Remember this policy per target glyph: a normal seconds update must not
+                // interrupt an unchanged hour/minute reel already moving to a selected city.
+                val animateThisChange = remember(char) { !selectionOnly || selection }
+                val before = widths.take(index).sum()
+                val centre = (with(density) { maxWidth.toPx() } - fullWidth) / 2f + before +
+                    widths.getOrElse(index) { 0f } / 2f
+                val position by animateFloatAsState(centre - cellWidth / 2f,
+                    tween(if (digits) 250 else 420, easing = FastOutSlowInEasing), label = "reelPosition")
+                // New slots in a longer title must begin with the previous paragraph's
+                // (empty) strip, not the target glyph, until their staggered turn arrives.
+                var staged by remember {
+                    mutableStateOf(MechanicalGlyph(previousText, index, previousCells.getOrElse(index) { "" }))
+                }
+                LaunchedEffect(text, char) {
+                    val next = MechanicalGlyph(text, index, char)
+                    if (next != staged) {
+                        val rank = if (digits) changed.indexOf(index).coerceAtLeast(0) else index
+                        if (animateThisChange) delay(mechanicalStagger(rank, selection).toLong())
+                        staged = next
+                    }
+                }
+                AnimatedContent(staged,
+                    modifier = Modifier.width(with(density) { cellWidth.toDp() }).fillMaxHeight()
+                        .graphicsLayer { translationX = position }
+                        .then(if (progressiveBlur) Modifier.wrapContentHeight(unbounded = true)
+                            .requiredHeight(viewportHeight + 16.dp)
+                            .featheredVerticalViewport(active = true, fadeHeightFraction = .18f)
+                        else Modifier.clipToBounds()),
+                    contentAlignment = Alignment.Center,
+                    transitionSpec = {
+                        if (!animateThisChange) EnterTransition.None togetherWith ExitTransition.None
+                        else ((slideInVertically(spring(dampingRatio = 1f, stiffness = 420f)) { it } + fadeIn(tween(100))) togetherWith
+                            (slideOutVertically(tween(180, easing = FastOutSlowInEasing)) { -it } + fadeOut(tween(100))))
+                            .using(SizeTransform(clip = !progressiveBlur))
+                    }, label = "mechanicalCell") { reel ->
+                    val tilt = if (animateThisChange) {
+                        val angle by transition.animateFloat(transitionSpec = { tween(230) }, label = "reelTilt") { state ->
+                            when (state) { EnterExitState.PreEnter -> -35f; EnterExitState.Visible -> 0f; EnterExitState.PostExit -> 35f }
+                        }
+                        angle
+                    } else 0f
+                    val blur = if (progressiveBlur && animateThisChange) {
+                        val travel by transition.animateFloat(transitionSpec = {
+                            if (targetState == EnterExitState.Visible) spring(dampingRatio = 1f, stiffness = 420f)
+                            else tween(180, easing = FastOutSlowInEasing)
+                        }, label = "nameEdgeBlur") { state ->
+                            when (state) {
+                                EnterExitState.PreEnter -> 1f
+                                EnterExitState.Visible -> 0f
+                                EnterExitState.PostExit -> -1f
+                            }
+                        }
+                        val edge = (abs(travel) / .75f).coerceIn(0f, 1f)
+                        edge * edge * (3f - 2f * edge) * 4f
+                    } else 0f
+                    val glyphModifier = Modifier.blur(blur.dp, edgeTreatment = BlurredEdgeTreatment.Unbounded).graphicsLayer {
+                            rotationX = tilt; cameraDistance = size.height * 8f
+                            transformOrigin = TransformOrigin.Center
+                        }
+                    if (digits) Text(reel.glyph, style = fitted, color = colorAt(index), maxLines = 1, modifier = glyphModifier)
+                    else {
+                        // Reassemble clipped strips of the shaped paragraph, rather than laying out
+                        // isolated letters. Narrow glyphs now keep their true bearings and kerning.
+                        val source = remember(reel.text, fitted) { measurer.measure(reel.text, fitted) }
+                        val sourceCells = remember(reel.text) { mechanicalCells(reel.text) }
+                        val startOffset = sourceCells.take(reel.index).sumOf { it.length }
+                        val endOffset = startOffset + (sourceCells.getOrNull(reel.index)?.length ?: 0)
+                        val startX = source.getHorizontalPosition(startOffset, true)
+                        val endX = source.getHorizontalPosition(endOffset, true)
+                        val advance = abs(endX - startX)
+                        Canvas(glyphModifier.width(with(density) { cellWidth.toDp() }).height(viewportHeight)) {
+                            if (advance > 0f) {
+                                val left = (size.width - advance) / 2f
+                                clipRect(left = left, right = left + advance) {
+                                    drawText(source, color = colorAt(index), topLeft = Offset(
+                                        left - min(startX, endX), (size.height - source.size.height) / 2f))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/MechanicalViewport.kt`
+
+```kotlin
+package app.expressiveclock.ui
+
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
+
+internal fun Modifier.featheredVerticalViewport(
+    active: Boolean,
+    fadeHeightFraction: Float = 0.18f,
+): Modifier = if (!active) this else this
+    .graphicsLayer {
+        compositingStrategy = CompositingStrategy.Offscreen
+    }
+    .drawWithContent {
+        drawContent()
+        val fadePx = size.height * fadeHeightFraction
+        val topFadeFraction = (fadePx / size.height).coerceIn(0f, 0.45f)
+        val bottomFadeFraction = 1f - topFadeFraction
+
+        val maskBrush = Brush.verticalGradient(
+            0.0f to Color.Transparent,
+            topFadeFraction to Color.Black,
+            bottomFadeFraction to Color.Black,
+            1.0f to Color.Transparent,
+        )
+
+        drawRect(
+            brush = maskBrush,
+            blendMode = BlendMode.DstIn,
+        )
+    }
+```
