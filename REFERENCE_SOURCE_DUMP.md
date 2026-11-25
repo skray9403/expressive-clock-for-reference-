@@ -6187,3 +6187,307 @@ fun ColorScheme.toAmoledBlack(): ColorScheme = copy(
     scrim = Color.Black,
 )
 ```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/theme/Type.kt`
+
+```kotlin
+package app.expressiveclock.ui.theme
+
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import app.expressiveclock.R
+
+/**
+ * The Material 3 Expressive type scale, driven off a single bundled variable font.
+ *
+ * ## Why one font and not two
+ *
+ * The published M3 type scale names **two** families: `Google Sans` for Display, Headline and
+ * Title-Large, and `Google Sans Text` for the other nine of fifteen styles (every piece of body
+ * copy, every list item, every button label). **Google Sans Text is not licensed for third-party
+ * use.** It carries no license grant in its binary and does not appear in the Google Fonts
+ * catalogue; `fonts.googleapis.com` will serve it if asked by name, but being served is not being
+ * licensed. That endpoint exists for Google's own properties.
+ *
+ * Google Sans Flex *is* OFL-1.1, and the Sans/Sans-Text split is fundamentally an optical-size
+ * distinction. The spec's own tokens set `opsz` equal to the font size for all fifteen styles, so
+ * driving the `opsz` axis reproduces both roles exactly rather than approximating them. That is
+ * what this file does, and it is why every style below carries an explicit optical size.
+ *
+ * Full evidence: `docs/reference/18-google-fonts-licensing-verified.md` in the parent suite.
+ *
+ * The clock's own numerals are **not** set in this font: they are drawn geometry, because no
+ * licensable face is narrow enough. See `ui/digits/ClockDigits.kt`. Everything else (titles,
+ * labels, city names) is Google Sans Flex.
+ *
+ * ## Where the numbers come from
+ *
+ * Sizes and line heights are identical in both sources and are not in dispute. Tracking is taken
+ * from the **published Google Sans scale**, not from `androidx.compose.material3.tokens`
+ * `TypeScaleTokens` (v0_103), because those values are tuned for Roboto, adding up to +0.5sp of
+ * letter-spacing at small sizes to compensate for a typeface we are not shipping. With a correct
+ * `opsz` the optical-size axis already does that work; adding Roboto's tracking on top would
+ * over-space the whole UI.
+ *
+ * Emphasized weights (Medium for display/headline/title-large, Bold for the rest) do come from the
+ * androidx tokens, and agree with the spec's note that the emphasized set "differs mainly in wght".
+ *
+ * Source table: `docs/reference/98-type-scale-tokens-parsed.md`.
+ */
+
+/** Weights we instantiate per optical size. Enough that a call-site `fontWeight` override picks a
+ *  real cut instead of triggering synthetic bold. */
+private val INSTANTIATED_WEIGHTS = intArrayOf(400, 500, 600, 700)
+
+private val familyCache = HashMap<Int, FontFamily>()
+
+/**
+ * A [FontFamily] of Google Sans Flex pinned to one optical size.
+ *
+ * `opsz` is clamped to the axis range published for the font (6–144); the merged binary we bundle
+ * exposes `opsz` 6..144 and `wght` 1..1000 and nothing else, which is exactly the axis set the
+ * documented type scale needs, since every style sets `wdth`, `GRAD`, `ROND`, `slnt`, `CRSV`,
+ * `FILL` and `HEXP` to their defaults.
+ */
+private fun googleSansFlex(opticalSize: Float): FontFamily = familyCache.getOrPut(opticalSize.toInt()) {
+    val opsz = opticalSize.coerceIn(6f, 144f)
+    FontFamily(
+        INSTANTIATED_WEIGHTS.map { w ->
+            Font(
+                resId = R.font.google_sans_flex,
+                weight = FontWeight(w),
+                variationSettings = FontVariation.Settings(
+                    FontVariation.weight(w),
+                    FontVariation.Setting("opsz", opsz),
+                ),
+            )
+        },
+    )
+}
+
+/** Builds one style with its optical size locked to its point size, per the spec's tokens. */
+private fun style(
+    size: Int,
+    lineHeight: Int,
+    weight: Int,
+    tracking: Double = 0.0,
+): TextStyle = TextStyle(
+    fontFamily = googleSansFlex(size.toFloat()),
+    fontWeight = FontWeight(weight),
+    fontSize = size.sp,
+    lineHeight = lineHeight.sp,
+    letterSpacing = tracking.sp,
+)
+
+private val REGULAR = 400
+private val MEDIUM = 500
+private val BOLD = 700
+
+fun clockTypography(): Typography = Typography().copy(
+    // Display / Headline / Title-Large, which are the spec's "Google Sans" roles.
+    displayLarge = style(57, 64, REGULAR),
+    displayMedium = style(45, 52, REGULAR),
+    displaySmall = style(36, 44, REGULAR),
+    headlineLarge = style(32, 40, REGULAR),
+    headlineMedium = style(28, 36, REGULAR),
+    headlineSmall = style(24, 32, REGULAR),
+    titleLarge = style(22, 28, REGULAR),
+
+    // Title-Medium and below: the spec's "Google Sans Text" roles, reproduced via opsz.
+    titleMedium = style(16, 24, MEDIUM),
+    titleSmall = style(14, 20, MEDIUM),
+    bodyLarge = style(16, 24, REGULAR),
+    bodyMedium = style(14, 20, REGULAR),
+    bodySmall = style(12, 16, REGULAR, tracking = 0.1),
+    labelLarge = style(14, 20, MEDIUM),
+    labelMedium = style(12, 16, MEDIUM, tracking = 0.1),
+    labelSmall = style(11, 16, MEDIUM, tracking = 0.1),
+
+    // [M3E-NEW] The emphasized scale is an expressive addition of 15 parallel styles whose job is
+    // to create weight contrast without changing the layout, since size and line height are
+    // unchanged. Reach for these to mark the one thing on a screen that matters most.
+    displayLargeEmphasized = style(57, 64, MEDIUM),
+    displayMediumEmphasized = style(45, 52, MEDIUM),
+    displaySmallEmphasized = style(36, 44, MEDIUM),
+    headlineLargeEmphasized = style(32, 40, MEDIUM),
+    headlineMediumEmphasized = style(28, 36, MEDIUM),
+    headlineSmallEmphasized = style(24, 32, MEDIUM),
+    titleLargeEmphasized = style(22, 28, MEDIUM),
+    titleMediumEmphasized = style(16, 24, BOLD),
+    titleSmallEmphasized = style(14, 20, BOLD),
+    bodyLargeEmphasized = style(16, 24, MEDIUM),
+    bodyMediumEmphasized = style(14, 20, MEDIUM),
+    bodySmallEmphasized = style(12, 16, MEDIUM, tracking = 0.1),
+    labelLargeEmphasized = style(14, 20, BOLD),
+    labelMediumEmphasized = style(12, 16, BOLD, tracking = 0.1),
+    labelSmallEmphasized = style(11, 16, BOLD, tracking = 0.1),
+)
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/theme/WorldClockType.kt`
+
+```kotlin
+package app.expressiveclock.ui.theme
+
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontSynthesis
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.sp
+
+/** Explicit cuts of the bundled Google Sans Flex; weights are baked into the variable instance. */
+internal object WorldClockType {
+    fun city(size: TextUnit = 18.sp) = cut(size, 94f, 560, 1.12f)
+    fun secondary(size: TextUnit = 13.sp) = cut(size, 98f, 400, 1.2f)
+    fun time(size: TextUnit = 32.sp, width: Float = 82f, weight: Int = 430) = cut(size, width, weight, 1.08f).copy(fontFeatureSettings = "tnum, lnum")
+
+    // Card cuts are independent of the mechanical header/readout typography.
+    fun cardCity() = cut(19.sp, 96f, 580, 1.10f, roundness = 35f)
+    fun cardDate() = cut(13.5.sp, 100f, 400, 1.18f)
+    fun cardTime(size: TextUnit = 34.sp) = cut(size, 92f, 480, 1.06f, roundness = 25f)
+        .copy(fontFeatureSettings = "tnum, lnum")
+
+    private fun cut(size: TextUnit, width: Float, weight: Int, leading: Float, roundness: Float = 0f) = TextStyle(
+        fontFamily = ClockFace.family(opticalSize = size.value, width = width, weight = weight, roundness = roundness),
+        fontWeight = FontWeight(weight),
+        fontSynthesis = FontSynthesis.None,
+        fontSize = size,
+        lineHeight = size * leading,
+        letterSpacing = 0.sp,
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
+    )
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/widget/DialGeometry.kt`
+
+```kotlin
+package app.expressiveclock.widget
+
+import app.expressiveclock.data.IndexSet
+import app.expressiveclock.data.NumeralSize
+
+/**
+ * Every proportion on the dial, as a fraction of **Rmin**, the *smallest* distance from the centre
+ * to the outline over a full turn.
+ *
+ * Rmin rather than the widget's half-width is the whole trick for arbitrary shapes: scale the hands
+ * off it and a hand can never poke out of a clover, an arrow or a semicircle, whatever direction it
+ * points. Numerals riding the outline are free to sit further out in the wide directions, because
+ * they are placed from the outline itself rather than from a radius.
+ *
+ * The hand figures are Google's canonical watch-face geometry (the 450 × 450 Watch Face Format
+ * reference dial, `w=20 h=190 pivotY=0.921` for the hour hand and so on), converted to fractions.
+ * The pin and cell figures come from `ClockDialSelectorCenterContainerSize` (8/256) and
+ * `ClockDialSelectorHandleContainerSize` (48/256) in Material's own time-picker tokens.
+ */
+object DialGeometry {
+
+    /* ── Hands, as fractions of Rmin ────────────────────────────────────────────────────── */
+    const val HOUR_LENGTH = 0.778f
+    const val MINUTE_LENGTH = 0.889f
+    const val SECOND_LENGTH = 0.820f
+
+    const val HOUR_WIDTH = 0.0889f
+    const val MINUTE_WIDTH = 0.0711f
+    const val SECOND_WIDTH = 0.0356f
+
+    /** The tail behind the pin. The thinnest hand carries the longest one, as on a real watch. */
+    const val HOUR_TAIL = 0.067f
+    const val MINUTE_TAIL = 0.0889f
+    const val SECOND_TAIL = 0.156f
+
+    const val PIN_DIAMETER = 0.0625f
+
+    /* ── Indices ────────────────────────────────────────────────────────────────────────── */
+    /**
+     * The circle numerals sit on by default.
+     *
+     * This is the numeral's *centre*, so half its ink sits outside it: at the old 0.889 (the
+     * minute hand's tip), a medium numeral reached 0.964 R and all but touched the outline. 0.82
+     * puts the same numeral's outer edge at 0.895 R and leaves the dial a visible margin.
+     */
+    const val NUMERAL_RING = 0.82f
+    /**
+     * Dot **radius**, not diameter; the old name was wrong and the value with it. At 0.016 R a dot
+     * on a 200 dp widget was 3 px across and read as a rendering artefact rather than as an index.
+     */
+    const val MINOR_DOT_RADIUS = 0.028f
+    const val TICK_LENGTH = 0.055f
+    const val TICK_LENGTH_MINOR = 0.030f
+
+    /**
+     * The smallest ring radius that fits twelve numerals without collision.
+     *
+     * Twelve cells of diameter `0.375 Rmin` (Material's own dial handle size) need an arc spacing
+     * of at least that much: `2πr/12 = 0.524 r ≥ 0.375 R`, so `r ≥ 0.716 R`.
+     */
+    const val MIN_RING_FOR_TWELVE = 0.716f
+
+    /**
+     * The tangential room one numeral gets, in units of Rmin. A glyph must fit inside it.
+     *
+     * Four numerals instead of twelve is three times the arc each, which is why "large" numerals
+     * and [IndexSet.QUARTERS] belong together and why "large" with all twelve has to be clamped.
+     */
+    fun arcSpacing(indexSet: IndexSet, ringR: Float): Float {
+        val n = indexSet.hours.size.coerceAtLeast(1)
+        return (2.0 * Math.PI * ringR / n).toFloat()
+    }
+
+    /**
+     * The cap height to actually use, in units of Rmin.
+     *
+     * The requested size is a ceiling, not a promise. Roman numerals are the case that forces this:
+     * `VIII` is four glyphs and roughly twice the tangential width of a single Arabic digit, so
+     * "large" with all twelve indices would overlap. [widestInkR] is the measured ink width of the
+     * widest string at cap height 1, so the clamp is against real glyphs rather than a guess.
+     */
+    fun clampedCap(size: NumeralSize, indexSet: IndexSet, ringR: Float, widestInkR: Float): Float {
+        if (widestInkR <= 0f) return size.capR
+        // Leave a tenth of the arc as breathing room between neighbours.
+        val room = arcSpacing(indexSet, ringR) * 0.9f
+        return minOf(size.capR, room / widestInkR)
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/widget/DigitalTextFit.kt`
+
+```kotlin
+package app.expressiveclock.widget
+
+/** Fit the widest possible time, reserving a small ink margin for every native text view. */
+internal object DigitalTextFit {
+    fun scale(
+        width: Float,
+        hours: Float,
+        colon: Float,
+        minutes: Float,
+        stacked: Boolean,
+        gutter: Float,
+    ): Float {
+        val text = if (stacked) maxOf(hours, minutes) else hours + colon + minutes
+        val margins = gutter * if (stacked) 1 else 3
+        return ((width - margins).coerceAtLeast(0f) / text.coerceAtLeast(1f)).coerceIn(0f, 1f)
+    }
+}
+```
