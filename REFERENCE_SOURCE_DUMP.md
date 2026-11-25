@@ -3253,3 +3253,209 @@ internal fun Modifier.featheredVerticalViewport(
         )
     }
 ```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/StopwatchDockIcon.kt`
+
+```kotlin
+/*
+ * Outline adapted from Material Icons Outlined.Timer.
+ * Copyright 2025 The Android Open Source Project. Licensed under Apache License 2.0.
+ * https://www.apache.org/licenses/LICENSE-2.0
+ */
+package app.expressiveclock.ui
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.Box
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.vector.path
+import androidx.compose.ui.unit.dp
+
+// Same 24-unit outline and hand geometry as the existing icon; only the hand moves.
+private val StopwatchCase = ImageVector.Builder("StopwatchCase", 24.dp, 24.dp, 24f, 24f).apply {
+    path(fill = SolidColor(Color.Black)) {
+        moveTo(15f, 1f); horizontalLineTo(9f); verticalLineToRelative(2f)
+        horizontalLineToRelative(6f); verticalLineTo(1f); close()
+        moveTo(19.03f, 7.39f); lineToRelative(1.42f, -1.42f)
+        curveToRelative(-.43f, -.51f, -.9f, -.99f, -1.41f, -1.41f)
+        lineToRelative(-1.42f, 1.42f)
+        curveTo(16.07f, 4.74f, 14.12f, 4f, 12f, 4f)
+        curveToRelative(-4.97f, 0f, -9f, 4.03f, -9f, 9f)
+        reflectiveCurveToRelative(4.02f, 9f, 9f, 9f)
+        reflectiveCurveToRelative(9f, -4.03f, 9f, -9f)
+        curveTo(21f, 10.88f, 20.26f, 8.93f, 19.03f, 7.39f); close()
+        moveTo(12f, 20f)
+        curveToRelative(-3.87f, 0f, -7f, -3.13f, -7f, -7f)
+        reflectiveCurveToRelative(3.13f, -7f, 7f, -7f)
+        reflectiveCurveToRelative(7f, 3.13f, 7f, 7f)
+        reflectiveCurveToRelative(-3.13f, 7f, -7f, 7f); close()
+    }
+}.build()
+
+@Composable
+internal fun StopwatchDockIcon(phase: () -> Float, tint: Color, modifier: Modifier = Modifier) {
+    Box(modifier) {
+        Icon(StopwatchCase, contentDescription = null, tint = tint, modifier = Modifier.matchParentSize())
+        Canvas(Modifier.matchParentSize()) {
+            withTransform({
+                scale(size.width / 24f, size.height / 24f, Offset.Zero)
+                rotate(phase(), Offset(12f, 13f))
+            }) {
+                drawRect(tint, topLeft = Offset(11f, 8f), size = Size(2f, 6f))
+            }
+        }
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/TimerReadoutGeometry.kt`
+
+```kotlin
+package app.expressiveclock.ui
+
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+
+internal data class TimerReadoutGeometry(val digitWidth: Dp, val colonWidth: Dp, val spacing: Dp, val capHeight: Dp)
+
+/** Shared with the Timer setup readout: 1 : .28 cells, .08 gaps, 1.32 cap ratio. */
+internal fun timerReadoutGeometry(availableWidth: Dp, text: String): TimerReadoutGeometry {
+    val units = text.count { it != ':' } + text.count { it == ':' } * .28f + (text.length - 1).coerceAtLeast(0) * .08f
+    val unit = if (units > 0) availableWidth / units else availableWidth
+    return TimerReadoutGeometry(unit, unit * .28f, unit * .08f, (unit.value * 1.32f).dp)
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/responsive/AppWindowSizeInfo.kt`
+
+```kotlin
+package app.expressiveclock.ui.responsive
+
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+
+private val TWO_PANE_MIN_WIDTH = 600.dp
+private val TWO_PANE_MIN_HEIGHT = 600.dp
+
+/**
+ * Layout classes for responsive switching in Expressive Clock.
+ *
+ * - [COMPACT]: Either dimension is below 600dp (including phones in landscape).
+ * - [EXPANDED]: Width and height are both at least 600dp (unfolded/tablet two-pane layout).
+ */
+enum class AppWindowWidthClass {
+    COMPACT,
+    EXPANDED,
+}
+
+/**
+ * Window size information wrapper.
+ */
+data class AppWindowSizeInfo(
+    val widthClass: AppWindowWidthClass,
+    val screenWidthDp: Dp,
+    val screenHeightDp: Dp,
+) {
+    /** Short windows need scrolling even when there are no laps or other list items yet. */
+    val isHeightCompact: Boolean
+        get() = screenHeightDp < TWO_PANE_MIN_HEIGHT
+
+    val isExpanded: Boolean
+        get() = widthClass == AppWindowWidthClass.EXPANDED
+
+    val isCompact: Boolean
+        get() = widthClass == AppWindowWidthClass.COMPACT
+}
+
+/**
+ * Calculates the current window size info from both available window dimensions.
+ *
+ * Re-evaluates dynamically when screen width changes (e.g. folding/unfolding, window resizing).
+ */
+@Composable
+fun rememberAppWindowSizeInfo(): AppWindowSizeInfo {
+    val configuration = LocalConfiguration.current
+    val widthDp = configuration.screenWidthDp.dp
+    val heightDp = configuration.screenHeightDp.dp
+
+    val widthClass = if (widthDp >= TWO_PANE_MIN_WIDTH && heightDp >= TWO_PANE_MIN_HEIGHT) {
+        AppWindowWidthClass.EXPANDED
+    } else {
+        AppWindowWidthClass.COMPACT
+    }
+
+    return AppWindowSizeInfo(
+        widthClass = widthClass,
+        screenWidthDp = widthDp,
+        screenHeightDp = heightDp,
+    )
+}
+
+/**
+ * CompositionLocal providing [AppWindowSizeInfo] throughout the UI hierarchy.
+ */
+val LocalAppWindowSizeInfo = staticCompositionLocalOf {
+    AppWindowSizeInfo(
+        widthClass = AppWindowWidthClass.COMPACT,
+        screenWidthDp = 360.dp,
+        screenHeightDp = 800.dp,
+    )
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/responsive/PersistentScrollEdges.kt`
+
+```kotlin
+package app.expressiveclock.ui.responsive
+
+import androidx.compose.foundation.ScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.layout
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.dp
+import app.expressiveclock.ui.screens.progressiveListEdgeMask
+
+/** Fixed viewport falloffs, with end gutters so the first/last controls can rest in clear space.
+ * Whether edges are needed depends on measured content, never the current scroll offset.
+ * Fitting content keeps its original geometry and does not incur a blur layer.
+ */
+@Composable
+internal fun Modifier.persistentScrollEdges(state: ScrollState): Modifier {
+    var viewport by remember { mutableIntStateOf(0) }
+    var overflowing by remember { mutableStateOf(false) }
+    return onSizeChanged { viewport = it.height }
+        .progressiveListEdgeMask(if (overflowing) 1f else 0f, if (overflowing) 1f else 0f)
+        .verticalScroll(state)
+        .layout { measurable, constraints ->
+            val child = measurable.measure(constraints)
+            val needsEdges = viewport > 0 && child.height > viewport
+            if (overflowing != needsEdges) overflowing = needsEdges
+            val gutter = if (needsEdges) 32.dp.roundToPx() else 0
+            layout(child.width, child.height + gutter * 2) { child.placeRelative(0, gutter) }
+        }
+}
+```
