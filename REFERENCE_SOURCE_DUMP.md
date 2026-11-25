@@ -3459,3 +3459,208 @@ internal fun Modifier.persistentScrollEdges(state: ScrollState): Modifier {
         }
 }
 ```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/responsive/ScrollPane.kt`
+
+```kotlin
+package app.expressiveclock.ui.responsive
+
+import app.expressiveclock.ui.responsive.persistentScrollEdges
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import app.expressiveclock.ui.screens.progressiveListEdgeMask
+
+/** Centre unchanged when content fits; scroll with soft edges when the window becomes too short. */
+@Composable
+internal fun ScrollPane(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+    val state = rememberScrollState()
+    BoxWithConstraints(modifier.fillMaxSize()) {
+        Column(Modifier.fillMaxWidth()
+            .persistentScrollEdges(state).heightIn(min = maxHeight),
+            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
+            content = content)
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/responsive/TwoPaneLayout.kt`
+
+```kotlin
+package app.expressiveclock.ui.responsive
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+
+/**
+ * A flexible, configurable two-pane layout foundation for expanded window widths.
+ *
+ * Supports:
+ * - Configurable left-pane and right-pane composables.
+ * - Configurable left/right weight proportions (e.g. 1f to 1f for equal split, or 0.38f to 0.62f for Master-Detail).
+ * - Configurable horizontal gap between panes.
+ * - Proper handling of independent pane bounds and edge clipping.
+ */
+@Composable
+fun TwoPaneLayout(
+    leftPane: @Composable BoxScope.() -> Unit,
+    rightPane: @Composable BoxScope.() -> Unit,
+    modifier: Modifier = Modifier,
+    leftWeight: Float = 1f,
+    rightWeight: Float = 1f,
+    paneSpacing: Dp = 24.dp,
+    contentPaddingDp: Dp = 24.dp,
+    clipLeftPane: Boolean = true,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(horizontal = contentPaddingDp),
+        horizontalArrangement = Arrangement.spacedBy(paneSpacing),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .weight(leftWeight)
+                .fillMaxHeight()
+                .then(if (clipLeftPane) Modifier.clipToBounds() else Modifier),
+            contentAlignment = Alignment.Center,
+            content = leftPane,
+        )
+        Box(
+            modifier = Modifier
+                .weight(rightWeight)
+                .fillMaxHeight()
+                .clipToBounds(),
+            contentAlignment = Alignment.Center,
+            content = rightPane,
+        )
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/screens/ClockHandMotion.kt`
+
+```kotlin
+package app.expressiveclock.ui.screens
+
+import androidx.compose.animation.core.CubicBezierEasing
+import java.time.ZoneId
+
+/** One immutable motion snapshot: target zone and both hand corrections change atomically. */
+internal data class ClockHandMotion(
+    val zone: ZoneId,
+    val startedAt: Long = 0L,
+    val durationMillis: Long = 0L,
+    val hourCorrection: Float = 0f,
+    val minuteCorrection: Float = 0f,
+) {
+    fun anglesAt(millis: Long): Pair<Float, Float> {
+        val target = clockAngles(millis, zone)
+        val progress = if (durationMillis <= 0L) 1f else
+            ((millis - startedAt).toFloat() / durationMillis).coerceIn(0f, 1f)
+        val remaining = 1f - settling.transform(progress)
+        return target.first + hourCorrection * remaining to target.second + minuteCorrection * remaining
+    }
+
+    fun retarget(next: ZoneId, millis: Long, duration: Long = 680L): ClockHandMotion {
+        val displayed = anglesAt(millis)
+        val target = clockAngles(millis, next)
+        return ClockHandMotion(next, millis, duration,
+            shortestClockDelta(displayed.first, target.first),
+            shortestClockDelta(displayed.second, target.second))
+    }
+
+    private companion object {
+        val settling = CubicBezierEasing(.2f, .85f, .25f, 1.04f)
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/screens/DialInteraction.kt`
+
+```kotlin
+package app.expressiveclock.ui.screens
+
+import android.os.Build
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.spring
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import app.expressiveclock.ui.luminousElasticClickable
+
+/** The Stopwatch’s state-change bounce and platform haptics, shared by both dials. */
+@Composable
+internal fun rememberDialRunningFeedback(running: Boolean?, identity: Any? = Unit): Animatable<Float, androidx.compose.animation.core.AnimationVector1D> {
+    val scale = remember(identity) { Animatable(1f) }
+    var previous by remember(identity) { mutableStateOf<Boolean?>(null) }
+    val view = LocalView.current
+    LaunchedEffect(identity, running) {
+        val before = previous
+        previous = running
+        if (before != null && running != null && before != running) {
+            view.performHapticFeedback(if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (running) HapticFeedbackConstants.GESTURE_START else HapticFeedbackConstants.GESTURE_END
+            } else HapticFeedbackConstants.KEYBOARD_TAP)
+            scale.snapTo(.95f)
+            scale.animateTo(1f, spring(dampingRatio = .58f, stiffness = 380f))
+        } else if (running == null) scale.snapTo(1f)
+    }
+    return scale
+}
+
+@Composable
+internal fun Modifier.timerDialTap(enabled: Boolean, running: Boolean, onToggle: () -> Unit): Modifier =
+    if (!enabled) this else semantics {
+        role = Role.Button
+        stateDescription = if (running) "Running timer. Tap to pause" else "Paused timer. Tap to resume"
+    }.luminousElasticClickable(
+        shape = CircleShape,
+        maxStretchPercent = .04f,
+        maxTranslateDp = 2.dp,
+        luminousRadiusScale = .58f,
+        onClick = onToggle,
+    )
+
+/** Keep the original 410dp face wherever it fits with 16dp side clearance.
+ * Clearance includes the inside border and small elastic overshoot; the existing diffuse
+ * lighting may feather beyond it, as before. Do not reserve its entire transparent tail.
+ */
+internal fun stopwatchFaceDiameter(width: Dp): Dp =
+    minOf(410.dp, (width - 32.dp).coerceAtLeast(1.dp))
+```
