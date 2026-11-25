@@ -6491,3 +6491,986 @@ internal object DigitalTextFit {
     }
 }
 ```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/widget/FaceOutline.kt`
+
+```kotlin
+package app.expressiveclock.widget
+
+import android.graphics.Path
+import android.graphics.PathMeasure
+import android.graphics.Rect
+import kotlin.math.abs
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.min
+import kotlin.math.sin
+
+/**
+ * Where things sit on an arbitrary face outline.
+ *
+ * This is the generalisation of `PillDial`'s closed-form stadium solver off a known equation and
+ * onto any `Path`. The stadium version could intersect a ray analytically; a clover cannot, so the
+ * outline is sampled into a polyline once and every query is a ray/segment intersection over it.
+ *
+ * The two things that make it look right, both learned the hard way on the in-app dial:
+ *
+ *  - **Inset along the inward normal, not along the ray.** Insetting along the ray leaves the
+ *    numerals nearest the wide axis visibly tighter to the wall than the one at twelve.
+ *  - **Correct for the glyph's own box.** A constant *anchor* inset is not a constant *ink*
+ *    clearance, because the glyph box is axis-aligned while the normal is usually oblique, and
+ *    "10" is twice the width of "3". Measured on the in-app dial before the correction: 17.1 px
+ *    against 21.9 px.
+ */
+class FaceOutline(path: Path, val cx: Float, val cy: Float) {
+
+    /** The outline as a closed polyline in final pixel coordinates. */
+    private val pts: FloatArray = run {
+        val approx = path.approximate(APPROX_ERROR_PX)
+        // approximate() returns (fraction, x, y) triples.
+        FloatArray(2 * (approx.size / 3)) { i ->
+            val t = i / 2
+            if (i % 2 == 0) approx[t * 3 + 1] else approx[t * 3 + 2]
+        }
+    }
+
+    /** The smallest distance from the centre to the outline, over a full turn. */
+    val rMin: Float = run {
+        var m = Float.MAX_VALUE
+        for (i in 0 until 360) {
+            val hit = castRay(i * Math.PI.toFloat() / 180f)
+            if (hit != null) m = min(m, hypot(hit.x - cx, hit.y - cy))
+        }
+        if (m == Float.MAX_VALUE) 1f else m
+    }
+
+    /** A point on the outline, with the inward unit normal there. */
+    class Hit(val x: Float, val y: Float, val nx: Float, val ny: Float)
+
+    /**
+     * Where the ray leaving the centre at [angle] (zero at twelve o'clock, growing clockwise)
+     * crosses the outline.
+     *
+     * Takes the **farthest** crossing rather than the nearest, which is what keeps a concave shape
+     * like a clover or a heart from placing its numerals inside a notch.
+     */
+    fun castRay(angle: Float): Hit? {
+        val dx = sin(angle)
+        val dy = -cos(angle)
+        var bestT = -1f
+        var bx = 0f
+        var by = 0f
+        var nx = 0f
+        var ny = 0f
+        val n = pts.size / 2
+        if (n < 2) return null
+        for (i in 0 until n) {
+            val j = (i + 1) % n
+            val ax = pts[i * 2]
+            val ay = pts[i * 2 + 1]
+            val ex = pts[j * 2]
+            val ey = pts[j * 2 + 1]
+            val sx = ex - ax
+            val sy = ey - ay
+            val denom = dx * sy - dy * sx
+            if (abs(denom) < 1e-7f) continue
+            val t = ((ax - cx) * sy - (ay - cy) * sx) / denom
+            val u = ((ax - cx) * dy - (ay - cy) * dx) / denom
+            if (t > bestT && u in 0f..1f) {
+                bestT = t
+                bx = cx + dx * t
+                by = cy + dy * t
+                // Segment normal, turned to face inward.
+                val len = hypot(sx, sy).takeIf { it > 1e-7f } ?: 1f
+                var px = sy / len
+                var py = -sx / len
+                if (px * (cx - bx) + py * (cy - by) < 0f) {
+                    px = -px
+                    py = -py
+                }
+                nx = px
+                ny = py
+            }
+        }
+        return if (bestT <= 0f) null else Hit(bx, by, nx, ny)
+    }
+
+    /**
+     * The centre for a glyph box of [ink] sitting at [angle], with its ink a constant [margin] from
+     * the wall.
+     *
+     * `support` is the half-extent of an axis-aligned box in the normal's direction: how far the
+     * box's own corner reaches toward the wall. Adding it is what turns a constant anchor inset
+     * into a constant ink clearance.
+     */
+    fun placeGlyph(angle: Float, ink: Rect, margin: Float): Hit? {
+        val edge = castRay(angle) ?: return null
+        val support = (ink.width() / 2f) * abs(edge.nx) + (ink.height() / 2f) * abs(edge.ny)
+        val d = margin + support
+        return Hit(edge.x + edge.nx * d, edge.y + edge.ny * d, edge.nx, edge.ny)
+    }
+
+    /**
+     * [count] points spread evenly **by arc length** around the outline, each with its inward
+     * normal, starting at twelve o'clock.
+     *
+     * By arc length, not by angle: on a flower or a twelve-sided cookie, equal angles bunch the
+     * marks up in the lobes and strand them across the notches.
+     */
+    fun alongOutline(path: Path, count: Int, inset: Float): List<Hit> {
+        val measure = PathMeasure(path, true)
+        val total = measure.length
+        if (total <= 0f || count <= 0) return emptyList()
+        val pos = FloatArray(2)
+        val tan = FloatArray(2)
+        // Start at the point nearest twelve o'clock so the marks line up with the hours.
+        val startHit = castRay(0f)
+        val startD = startHit?.let { nearestDistance(measure, total, it.x, it.y) } ?: 0f
+        return (0 until count).map { i ->
+            val d = (startD + total * i / count) % total
+            measure.getPosTan(d, pos, tan)
+            val len = hypot(tan[0], tan[1]).takeIf { it > 1e-7f } ?: 1f
+            var nx = tan[1] / len
+            var ny = -tan[0] / len
+            if (nx * (cx - pos[0]) + ny * (cy - pos[1]) < 0f) {
+                nx = -nx
+                ny = -ny
+            }
+            Hit(pos[0] + nx * inset, pos[1] + ny * inset, nx, ny)
+        }
+    }
+
+    private fun nearestDistance(measure: PathMeasure, total: Float, x: Float, y: Float): Float {
+        val pos = FloatArray(2)
+        val tan = FloatArray(2)
+        var best = 0f
+        var bestD = Float.MAX_VALUE
+        var d = 0f
+        val step = total / 720f
+        while (d < total) {
+            measure.getPosTan(d, pos, tan)
+            val dist = hypot(pos[0] - x, pos[1] - y)
+            if (dist < bestD) {
+                bestD = dist
+                best = d
+            }
+            d += step
+        }
+        return best
+    }
+
+    private companion object {
+        /** Half a pixel: finer than the eye and far finer than any glyph placement needs. */
+        const val APPROX_ERROR_PX = 0.5f
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/widget/FaceRenderer.kt`
+
+```kotlin
+package app.expressiveclock.widget
+
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Rect
+import app.expressiveclock.data.FaceFill
+import app.expressiveclock.data.IndexSet
+import app.expressiveclock.data.MinorIndex
+import app.expressiveclock.data.NumeralLayout
+import app.expressiveclock.data.NumeralSystem
+import app.expressiveclock.data.WidgetConfig
+import app.expressiveclock.data.WidgetFontFamily
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.sin
+
+/**
+ * The still half of the clock: outline, fill, indices and numerals, drawn once into a bitmap.
+ *
+ * Everything that moves is somebody else's problem. The hands are the host's `AnalogClock` and
+ * the date is its `TextClock`. This bitmap changes only when the configuration, the size, the
+ * palette or the day/night mode changes, which is why the widget costs nothing to run.
+ */
+object FaceRenderer {
+
+    class Colours(
+        val face: Int,
+        /** Numerals. */
+        val onFace: Int,
+        /** Dots, rings and ticks. A step down from [onFace] so the numerals still lead. */
+        val minor: Int,
+        val outline: Int,
+        /** The single accent, for previews and thumbnails that draw one representative colour. */
+        val accent: Int,
+        val hourHand: Int,
+        val minuteHand: Int,
+        val secondHand: Int,
+        val pin: Int,
+    )
+
+    /**
+     * Draws the face at [w] × [h] pixels.
+     *
+     * Returns the bitmap along with the `Rmin` and centre the hands must be scaled against, so the
+     * two renderers cannot disagree about where the middle of the clock is.
+     */
+    class Face(val bitmap: Bitmap, val rMin: Float, val cx: Float, val cy: Float)
+
+    fun render(context: Context, config: WidgetConfig, colours: Colours, w: Int, h: Int): Face {
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val wf = w.toFloat()
+        val hf = h.toFloat()
+
+        // The fitted path is a *centreline*, so an outline stroke would spill half its width past
+        // the widget. Fitting into a rect inset by half the stroke is what keeps it inside.
+        val strokeR = config.outline.widthR
+        val provisional = facePath(config.shape, config.pillOrientation, config.fit, wf, hf)
+        val provisionalOutline = FaceOutline(provisional, wf / 2f, hf / 2f)
+        val strokePx = strokeR * provisionalOutline.rMin
+        val path = if (strokePx > 0f) {
+            facePath(
+                config.shape, config.pillOrientation, config.fit,
+                wf - strokePx, hf - strokePx,
+            ).also { it.offset(strokePx / 2f, strokePx / 2f) }
+        } else {
+            provisional
+        }
+
+        val outline = FaceOutline(path, wf / 2f, hf / 2f)
+        val r = outline.rMin
+
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+        when (config.faceFill) {
+            FaceFill.NONE -> Unit
+            FaceFill.CONTAINER -> {
+                fill.color = colours.face
+                canvas.drawPath(path, fill)
+            }
+        }
+        if (strokePx > 0f) {
+            canvas.drawPath(
+                path,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = strokePx
+                    // Round joins rather than mitred: a mitre on a star's sharp vertex reaches four
+                    // times the stroke width past the path and straight out of the widget.
+                    strokeJoin = Paint.Join.ROUND
+                    strokeCap = Paint.Cap.ROUND
+                    color = colours.outline
+                },
+            )
+        }
+
+        drawIndices(context, canvas, config, colours, outline, path, r)
+        drawNumerals(context, canvas, config, colours, outline, r)
+
+        return Face(bitmap, r, wf / 2f, hf / 2f)
+    }
+
+    /** Dots or ticks at the hour positions the numerals do not occupy. */
+    private fun drawIndices(
+        context: Context,
+        canvas: Canvas,
+        config: WidgetConfig,
+        colours: Colours,
+        outline: FaceOutline,
+        path: Path,
+        r: Float,
+    ) {
+        if (config.minorIndices == MinorIndex.NONE) return
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = colours.minor }
+        val numbered = if (config.numerals == NumeralSystem.NONE) emptySet() else config.indexSet.hours
+
+        when (config.minorIndices) {
+            MinorIndex.DOTS, MinorIndex.RINGS -> {
+                val filled = config.minorIndices == MinorIndex.DOTS
+                paint.style = if (filled) Paint.Style.FILL else Paint.Style.STROKE
+                paint.strokeWidth = 0.014f * r
+                // Rings read lighter than dots at the same diameter, so they are drawn a shade
+                // larger. Without that, swapping between the two looks like a size change.
+                val radius = DialGeometry.MINOR_DOT_RADIUS * r * (if (filled) 1.0f else 1.35f)
+                for (hour in 1..12) {
+                    if (hour in numbered) continue
+                    val at = ringPoint(outline, config, hour * 30f, r, DialGeometry.NUMERAL_RING)
+                    canvas.drawCircle(at.first, at.second, radius, paint)
+                }
+            }
+            MinorIndex.TICKS, MinorIndex.TICKS_60 -> {
+                paint.style = Paint.Style.STROKE
+                paint.strokeCap = Paint.Cap.ROUND
+                val count = if (config.minorIndices == MinorIndex.TICKS_60) 60 else 12
+                for (i in 0 until count) {
+                    val isHour = i % (count / 12) == 0
+                    val hour = i / (count / 12) + if (i % (count / 12) == 0) 0 else 0
+                    if (isHour && (hour.takeIf { it != 0 } ?: 12) in numbered) continue
+                    val angle = i * 360f / count
+                    val len = (if (isHour) DialGeometry.TICK_LENGTH else DialGeometry.TICK_LENGTH_MINOR) * r
+                    paint.strokeWidth = (if (isHour) 0.014f else 0.008f) * r
+                    val outer = ringPoint(outline, config, angle, r, 1f, inset = 0.04f * r)
+                    val inner = ringPoint(outline, config, angle, r, 1f, inset = 0.04f * r + len)
+                    canvas.drawLine(outer.first, outer.second, inner.first, inner.second, paint)
+                }
+            }
+            MinorIndex.NONE -> Unit
+        }
+    }
+
+    private fun drawNumerals(
+        context: Context,
+        canvas: Canvas,
+        config: WidgetConfig,
+        colours: Colours,
+        outline: FaceOutline,
+        r: Float,
+    ) {
+        if (config.numerals == NumeralSystem.NONE || config.indexSet == IndexSet.NONE) return
+
+        val ringR = maxOf(
+            DialGeometry.NUMERAL_RING,
+            if (config.indexSet == IndexSet.ALL_TWELVE) DialGeometry.MIN_RING_FOR_TWELVE else 0f,
+        )
+
+        val widthVal = if (config.analogFont == WidgetFontFamily.GOOGLE_SANS) 25f else 100f
+
+        // Measure the widest label the system can produce at cap height 1, so the clamp is against
+        // real glyphs rather than an assumption about how wide a numeral is.
+        val probe = TextInk.numeralPaint(
+            context, 100f,
+            width = widthVal,
+            weight = config.analogWeight.weightInt,
+            roundness = config.numeralRound.axis,
+            system = config.numerals,
+            fontFamily = config.analogFont,
+        )
+        val widest = TextInk.widest(config.numerals)
+        val probeInk = TextInk.ink(probe, widest)
+        val widestPerCap = if (probeInk.height() > 0) {
+            probeInk.width().toFloat() / probeInk.height().toFloat()
+        } else {
+            1f
+        }
+        val capR = DialGeometry.clampedCap(config.numeralSize, config.indexSet, ringR, widestPerCap)
+        val capPx = capR * r
+
+        val paint = TextInk.numeralPaint(
+            context, 100f,
+            width = widthVal,
+            weight = config.analogWeight.weightInt,
+            roundness = config.numeralRound.axis,
+            system = config.numerals,
+            fontFamily = config.analogFont,
+        ).apply {
+            color = colours.onFace
+            textSize = TextInk.sizeForCap(this, widest, capPx)
+        }
+        val ink = Rect()
+
+        for (hour in config.indexSet.hours) {
+            val text = TextInk.label(hour, config.numerals)
+            if (text.isEmpty()) continue
+            TextInk.ink(paint, text, ink)
+            val angleDeg = (hour % 12) * 30f
+            val angleRad = Math.toRadians(angleDeg.toDouble()).toFloat()
+
+            val (x, y, rotation) = when (config.numeralLayout) {
+                NumeralLayout.CIRCLE_UPRIGHT -> {
+                    val rr = ringR * r
+                    Triple(
+                        outline.cx + sin(angleRad) * rr,
+                        outline.cy - cos(angleRad) * rr,
+                        0f,
+                    )
+                }
+                NumeralLayout.SHAPE_UPRIGHT, NumeralLayout.SHAPE_ROTATED -> {
+                    val margin = 0.10f * r
+                    val hit = outline.placeGlyph(angleRad, ink, margin)
+                    // Turned with the dial, but flipped through the lower half so a numeral is
+                    // never upside down, which is the same rule the world-clock dial uses.
+                    val rot = if (config.numeralLayout == NumeralLayout.SHAPE_ROTATED) {
+                        angleDeg + if (angleDeg.mod(360f) in 90f..270f) 180f else 0f
+                    } else {
+                        0f
+                    }
+                    if (hit == null) {
+                        Triple(outline.cx, outline.cy, 0f)
+                    } else {
+                        Triple(hit.x, hit.y, rot)
+                    }
+                }
+            }
+
+            canvas.save()
+            if (rotation != 0f) canvas.rotate(rotation, x, y)
+            // getTextBounds' rect is relative to the pen origin, so this centres the *ink* rather
+            // than the advance box; the difference is visible on "1" and on Roman "I".
+            canvas.drawText(
+                text,
+                x - ink.width() / 2f - ink.left,
+                y + ink.height() / 2f - ink.bottom,
+                paint,
+            )
+            canvas.restore()
+        }
+    }
+
+    /** A point at [angleDeg] on the clock face dial. */
+    private fun ringPoint(
+        outline: FaceOutline,
+        config: WidgetConfig,
+        angleDeg: Float,
+        r: Float,
+        ringFraction: Float,
+        inset: Float = 0f,
+    ): Pair<Float, Float> {
+        val a = Math.toRadians(angleDeg.toDouble()).toFloat()
+        val rr = ringFraction * r - inset
+        return outline.cx + sin(a) * rr to outline.cy - cos(a) * rr
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/widget/HandRenderer.kt`
+
+```kotlin
+package app.expressiveclock.widget
+
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
+import app.expressiveclock.data.HandStyle
+import kotlin.math.roundToInt
+
+/**
+ * The three hands, each as its own square bitmap pointing at twelve.
+ *
+ * `AnalogClock` rotates whatever icon it is given about the icon's own centre, so every hand is
+ * drawn into a square of side `2 × tipLength` with the pivot dead in the middle and the hand
+ * pointing straight up. Getting that wrong is invisible at twelve o'clock and obvious at four.
+ *
+ * The pin is drawn onto the **topmost enabled hand** rather than onto the face, because
+ * `AnalogClock.onDraw` paints dial → hour → minute → second and nothing of ours can get above it.
+ * A pin on the face would be buried under all three hands.
+ */
+object HandRenderer {
+
+    /**
+     * @param lengthR tip distance from the pivot, as a fraction of Rmin
+     * @param widthR  hand width, as a fraction of Rmin
+     * @param tailR   counterweight length behind the pivot, as a fraction of Rmin
+     */
+    fun render(
+        style: HandStyle,
+        colour: Int,
+        rMin: Float,
+        lengthR: Float,
+        widthR: Float,
+        tailR: Float,
+        pinDiameterR: Float,
+        pinColour: Int,
+    ): Bitmap {
+        val tip = lengthR * rMin
+        // The square has to hold the tail as well, or a long counterweight is clipped.
+        val half = maxOf(tip, tailR * rMin) + widthR * rMin
+        val side = (2f * half).roundToInt().coerceAtLeast(2)
+        val bitmap = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+        if (style == HandStyle.OFF) return bitmap // fully transparent; see HandStyle.OFF
+
+        val canvas = Canvas(bitmap)
+        val cx = side / 2f
+        val cy = side / 2f
+        val w = widthR * rMin
+        val tail = tailR * rMin
+
+        // Named `fill`, not `paint`: `style` is already this function's HandStyle parameter and
+        // `apply { style = ... }` would resolve to it and quietly fail to compile as something else.
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG)
+        fill.color = colour
+        fill.style = Paint.Style.FILL
+
+        when (style) {
+            HandStyle.BATON -> canvas.drawRoundRect(
+                cx - w / 2f, cy - tip, cx + w / 2f, cy + tail, w / 2f, w / 2f, fill,
+            )
+
+            HandStyle.NEEDLE -> canvas.drawRoundRect(
+                cx - w / 4f, cy - tip, cx + w / 4f, cy + tail, w / 4f, w / 4f, fill,
+            )
+
+            HandStyle.TAPER -> canvas.drawPath(
+                Path().apply {
+                    moveTo(cx, cy - tip)
+                    lineTo(cx + w / 2f, cy - tip * 0.15f)
+                    lineTo(cx + w / 2.6f, cy + tail)
+                    lineTo(cx - w / 2.6f, cy + tail)
+                    lineTo(cx - w / 2f, cy - tip * 0.15f)
+                    close()
+                },
+                fill,
+            )
+
+            HandStyle.DIAMOND -> canvas.drawPath(
+                Path().apply {
+                    moveTo(cx, cy - tip)
+                    lineTo(cx + w / 2f, cy - tip * 0.4f)
+                    lineTo(cx, cy + tail)
+                    lineTo(cx - w / 2f, cy - tip * 0.4f)
+                    close()
+                },
+                fill,
+            )
+
+            HandStyle.OUTLINE -> canvas.drawRoundRect(
+                cx - w / 2f, cy - tip, cx + w / 2f, cy + tail, w / 2f, w / 2f,
+                Paint(fill).also {
+                    it.style = Paint.Style.STROKE
+                    it.strokeWidth = w * 0.28f
+                },
+            )
+
+            /**
+             * A hairline with a disc riding near the tip. That is the counterpoise seconds hand
+             * every chronograph has, and the one shape the six original styles were missing.
+             */
+            HandStyle.BALL -> {
+                val ballR = w * 1.5f
+                // The stick runs the *whole* length and the disc rides inboard of the tip, so the
+                // hand still points at something. That is what separates it from [HandStyle.DOT],
+                // where the disc is the tip.
+                canvas.drawRoundRect(
+                    cx - w / 4f, cy - tip, cx + w / 4f, cy + tail, w / 4f, w / 4f, fill,
+                )
+                canvas.drawCircle(cx, cy - tip + ballR * 2.1f, ballR, fill)
+            }
+
+            /** Disc at the very tip with no overhang: the Braun/Rams seconds hand. */
+            HandStyle.DOT -> {
+                val ballR = w * 1.2f
+                // Hairline stick stopping dead at the disc, and the disc's outer edge *is* the
+                // tip. Thinner stem and smaller disc than [HandStyle.BALL], so the two read apart.
+                canvas.drawRoundRect(
+                    cx - w / 6f, cy - tip + ballR * 2f, cx + w / 6f, cy + tail, w / 6f, w / 6f, fill,
+                )
+                canvas.drawCircle(cx, cy - tip + ballR, ballR, fill)
+            }
+
+            /** An open ring at the end of a stick. Reads as a marker rather than a pointer. */
+            HandStyle.RING -> {
+                val ringR = w * 1.7f
+                val stroke = Paint(fill).also {
+                    it.style = Paint.Style.STROKE
+                    it.strokeWidth = w * 0.45f
+                }
+                canvas.drawRoundRect(
+                    cx - w / 5f, cy - tip + ringR * 2f, cx + w / 5f, cy + tail, w / 5f, w / 5f, fill,
+                )
+                canvas.drawCircle(cx, cy - tip + ringR, ringR, stroke)
+            }
+
+            /** The dress-watch leaf, pointed at both ends and widest in the middle. */
+            HandStyle.LEAF -> canvas.drawPath(
+                Path().apply {
+                    moveTo(cx, cy - tip)
+                    quadTo(cx + w * 0.85f, cy - tip * 0.45f, cx, cy + tail)
+                    quadTo(cx - w * 0.85f, cy - tip * 0.45f, cx, cy - tip)
+                    close()
+                },
+                fill,
+            )
+
+            /** A straight stick with a triangular head, for a legible hour hand. */
+            HandStyle.ARROW -> {
+                val headLen = tip * 0.32f
+                canvas.drawRoundRect(
+                    cx - w / 3f, cy - tip + headLen, cx + w / 3f, cy + tail, w / 3f, w / 3f, fill,
+                )
+                canvas.drawPath(
+                    Path().apply {
+                        moveTo(cx, cy - tip)
+                        lineTo(cx + w * 0.9f, cy - tip + headLen)
+                        lineTo(cx - w * 0.9f, cy - tip + headLen)
+                        close()
+                    },
+                    fill,
+                )
+            }
+
+            HandStyle.OFF -> Unit
+        }
+
+        if (pinDiameterR > 0f) {
+            canvas.drawCircle(
+                cx, cy, pinDiameterR * rMin / 2f,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply { color = pinColour },
+            )
+        }
+        return bitmap
+    }
+
+    /** A 1×1 transparent bitmap, which is what an "off" hour or minute hand has to be. */
+    fun blank(): Bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888)
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/widget/ShapeFit.kt`
+
+```kotlin
+package app.expressiveclock.widget
+
+import android.graphics.Matrix
+import android.graphics.Path
+import androidx.compose.material3.MaterialShapes
+import androidx.graphics.shapes.CornerRounding
+import androidx.graphics.shapes.RoundedPolygon
+import androidx.graphics.shapes.circle
+import androidx.graphics.shapes.pill
+import androidx.graphics.shapes.rectangle
+import androidx.graphics.shapes.toPath
+import app.expressiveclock.data.FaceShape
+import app.expressiveclock.data.FitMode
+import app.expressiveclock.data.PillOrientation
+import kotlin.math.atan2
+import kotlin.math.hypot
+import kotlin.math.min
+
+/**
+ * Fitting a Material shape into a widget's rectangle so it touches all four edges and crosses none.
+ *
+ * Everything here is `android.graphics` and `androidx.graphics.shapes` only. The `toPath`/`toShape`
+ * overloads in material3 take a `Composer` and cannot be called from a widget, but
+ * `Shapes_androidKt.toPath(RoundedPolygon, android.graphics.Path)` is a plain function and is what
+ * these use.
+ */
+
+/**
+ * Maps the polygon's **exact ink bounds** onto the rectangle.
+ *
+ * `calculateBounds()` defaults to `approximate = true`, which returns the union of the Bézier
+ * *control-point* boxes, a strict superset of the ink and not a tight one. Measured waste if you
+ * trust it: Semicircle 18.75 %, Clamshell 16.28 %, Arrow 11.53 %, Cookie4Sided 6.22 % on all four
+ * sides. Every one of those is a visible gap between the face and the widget's edge, which is
+ * exactly what must not happen. `approximate = false` solves the cubic-derivative roots instead and
+ * is exact.
+ *
+ * Affine maps commute with Bézier evaluation, so scaling control points and scaling the rendered
+ * curve give the identical curve and the transform itself contributes no error.
+ */
+fun RoundedPolygon.fillRect(
+    l: Float,
+    t: Float,
+    r: Float,
+    b: Float,
+    uniform: Boolean = false,
+    out: Path = Path(),
+    scratch: FloatArray = FloatArray(4),
+): Path {
+    val e = calculateBounds(scratch, /* approximate = */ false)
+    val w = (e[2] - e[0]).takeIf { it > 1e-6f } ?: 1f
+    val h = (e[3] - e[1]).takeIf { it > 1e-6f } ?: 1f
+    var sx = (r - l) / w
+    var sy = (b - t) / h
+    var dx = l - e[0] * sx
+    var dy = t - e[1] * sy
+    if (uniform) {
+        val s = min(sx, sy)
+        sx = s
+        sy = s
+        dx = l + ((r - l) - w * s) / 2f - e[0] * s
+        dy = t + ((b - t) - h * s) / 2f - e[1] * s
+    }
+    out.rewind()
+    toPath(out)
+    out.transform(Matrix().apply { setScale(sx, sy); postTranslate(dx, dy) })
+    return out
+}
+
+/**
+ * A diagonal stadium that inscribes the widget exactly, touching all four edges, with **no
+ * distortion**. It is a true pill moved by a rotation and a translation, so its caps stay
+ * perfectly circular.
+ *
+ * From a stadium's support function `h(n) = c·n + L|u·n| + r`, touching all four sides requires
+ * `2(L|cos θ| + r) = W` and `2(L|sin θ| + r) = H`. Setting θ = 45° therefore *forces* W = H: a
+ * 45° stadium's bounding box is always square. Dropping the angle constraint and keeping "touches
+ * all four sides" leaves this one-parameter family in `r`, whose angle is
+ * `atan2(H/2 − r, W/2 − r)`, or 12–18° on a wide widget. That is the honest diagonal; a
+ * visually-45° pill that also fills a non-square box does not exist.
+ *
+ * `r → 0` degenerates to the rectangle's own diagonal; `r → min(W,H)/2` collapses to a horizontal
+ * pill.
+ */
+fun diagonalPill(
+    w: Float,
+    h: Float,
+    r: Float = 0.30f * min(w, h),
+    descending: Boolean = true,
+    out: Path = Path(),
+): Path {
+    val ax = w / 2f - r
+    val ay = h / 2f - r
+    if (ax <= 0f || ay <= 0f) {
+        // Degenerate box, so fall back to the plain pill rather than throwing inside a receiver.
+        return RoundedPolygon.pill(width = w, height = h, centerX = w / 2f, centerY = h / 2f)
+            .toPath(out)
+    }
+    val degrees = Math.toDegrees(atan2(ay, ax).toDouble()).toFloat()
+    val half = hypot(ax, ay)
+    out.rewind()
+    RoundedPolygon.pill(width = 2f * (half + r), height = 2f * r).toPath(out)
+    out.transform(
+        Matrix().apply {
+            setRotate(if (descending) degrees else -degrees)
+            postTranslate(w / 2f, h / 2f)
+        }
+    )
+    return out
+}
+
+/**
+ * The face outline for a configuration, in pixels, filling `w × h`.
+ *
+ * The four parametric shapes are *rebuilt* at the target aspect so their corners stay circular.
+ * Everything else is a baked point list and can only be stretched, which turns circular roundings
+ * into ellipses of semi-axes `(r·sx, r·sy)`. That is unavoidable, and it is the reason
+ * [FitMode.UNIFORM] is offered.
+ */
+fun facePath(
+    shape: FaceShape,
+    pill: PillOrientation,
+    fit: FitMode,
+    w: Float,
+    h: Float,
+    out: Path = Path(),
+): Path {
+    val uniform = fit == FitMode.UNIFORM
+    return when (shape) {
+        FaceShape.CIRCLE -> {
+            val d = min(w, h)
+            val l = (w - d) / 2f
+            val t = (h - d) / 2f
+            RoundedPolygon.circle(numVertices = 24, radius = 0.5f, centerX = 0.5f, centerY = 0.5f)
+                .fillRect(l, t, l + d, t + d, uniform = true, out)
+        }
+
+        FaceShape.SQUARE_SHARP ->
+            RoundedPolygon.rectangle(w, h, CornerRounding.Unrounded, centerX = w / 2f, centerY = h / 2f)
+                .toPath(out)
+
+        FaceShape.ROUNDED_SQUARE ->
+            RoundedPolygon.rectangle(
+                width = w,
+                height = h,
+                rounding = CornerRounding(0.22f * min(w, h), smoothing = 0.6f),
+                centerX = w / 2f,
+                centerY = h / 2f,
+            ).toPath(out)
+
+        FaceShape.PILL -> when (pill) {
+            PillOrientation.DIAGONAL -> diagonalPill(w, h, out = out)
+            // `RoundedPolygon.pill` picks its own long axis from width vs height, so the two
+            // upright orientations only differ when the widget is close to square.
+            PillOrientation.VERTICAL ->
+                RoundedPolygon.pill(min(w, h), h, centerX = w / 2f, centerY = h / 2f).toPath(out)
+            PillOrientation.HORIZONTAL ->
+                RoundedPolygon.pill(w, min(w, h), centerX = w / 2f, centerY = h / 2f).toPath(out)
+        }
+
+        else -> shape.materialShape().fillRect(0f, 0f, w, h, uniform, out)
+    }
+}
+
+/**
+ * The baked Material point list behind a non-parametric [FaceShape].
+ *
+ * Each getter returns a cached, already-normalised `RoundedPolygon`, so this is cheap and safe to
+ * call per draw. Circle is the fallback rather than a throw: an enum value from a newer build must
+ * degrade to a working clock.
+ */
+fun FaceShape.materialShape(): RoundedPolygon = when (this) {
+    FaceShape.ARCH -> MaterialShapes.Arch
+    FaceShape.ARROW -> MaterialShapes.Arrow
+    FaceShape.BOOM -> MaterialShapes.Boom
+    FaceShape.BUN -> MaterialShapes.Bun
+    FaceShape.BURST -> MaterialShapes.Burst
+    FaceShape.CLAM_SHELL -> MaterialShapes.ClamShell
+    FaceShape.CLOVER_4 -> MaterialShapes.Clover4Leaf
+    FaceShape.CLOVER_8 -> MaterialShapes.Clover8Leaf
+    FaceShape.COOKIE_4 -> MaterialShapes.Cookie4Sided
+    FaceShape.COOKIE_6 -> MaterialShapes.Cookie6Sided
+    FaceShape.COOKIE_7 -> MaterialShapes.Cookie7Sided
+    FaceShape.COOKIE_9 -> MaterialShapes.Cookie9Sided
+    FaceShape.COOKIE_12 -> MaterialShapes.Cookie12Sided
+    FaceShape.DIAMOND -> MaterialShapes.Diamond
+    FaceShape.FAN -> MaterialShapes.Fan
+    FaceShape.FLOWER -> MaterialShapes.Flower
+    FaceShape.GEM -> MaterialShapes.Gem
+    FaceShape.GHOSTISH -> MaterialShapes.Ghostish
+    FaceShape.HEART -> MaterialShapes.Heart
+    FaceShape.MATERIAL_PILL -> MaterialShapes.Pill
+    FaceShape.OVAL -> MaterialShapes.Oval
+    FaceShape.PENTAGON -> MaterialShapes.Pentagon
+    FaceShape.PIXEL_CIRCLE -> MaterialShapes.PixelCircle
+    FaceShape.PIXEL_TRIANGLE -> MaterialShapes.PixelTriangle
+    FaceShape.PUFFY -> MaterialShapes.Puffy
+    FaceShape.PUFFY_DIAMOND -> MaterialShapes.PuffyDiamond
+    FaceShape.SEMI_CIRCLE -> MaterialShapes.SemiCircle
+    FaceShape.SLANTED -> MaterialShapes.Slanted
+    FaceShape.SOFT_BOOM -> MaterialShapes.SoftBoom
+    FaceShape.SOFT_BURST -> MaterialShapes.SoftBurst
+    FaceShape.SQUIRCLE -> MaterialShapes.Square
+    FaceShape.SUNNY -> MaterialShapes.Sunny
+    FaceShape.TRIANGLE -> MaterialShapes.Triangle
+    FaceShape.VERY_SUNNY -> MaterialShapes.VerySunny
+    else -> MaterialShapes.Circle
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/widget/TextInk.kt`
+
+```kotlin
+package app.expressiveclock.widget
+
+import android.content.Context
+import android.graphics.Paint
+import android.graphics.Rect
+import android.graphics.Typeface
+import android.os.Build
+import androidx.core.content.res.ResourcesCompat
+import app.expressiveclock.R
+import app.expressiveclock.data.NumeralSystem
+import app.expressiveclock.data.WidgetFontFamily
+
+/**
+ * Text for the widget, built on `android.graphics.Paint` with no Compose anywhere.
+ *
+ * A widget's bitmap is rendered in a `BroadcastReceiver` or a config activity's background work,
+ * so none of the app's `@Composable` type layer is reachable. What *is* reachable is everything in
+ * `ClockFace` that is a plain constant or a plain function, and the technique its `rememberInkBounds`
+ * uses: `Paint.getTextBounds` for ink, `Paint.measureText` for advance.
+ */
+object TextInk {
+
+    /**
+     * A paint pinned to a point in Google Sans Flex's axis space.
+     *
+     * `Paint.setFontVariationSettings` is API 26 and returns false when no underlying font carries
+     * the axes. It is checked rather than assumed, because the failure is silent: numerals would
+     * come out at normal width with no error anywhere.
+     */
+    fun numeralPaint(
+        context: Context,
+        sizePx: Float,
+        width: Float = 100f,
+        weight: Int = 500,
+        roundness: Float = 0f,
+        system: NumeralSystem = NumeralSystem.ARABIC,
+        fontFamily: WidgetFontFamily = WidgetFontFamily.GOOGLE_SANS,
+    ): Paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply {
+        typeface = when {
+            system == NumeralSystem.EASTERN_ARABIC -> ResourcesCompat.getFont(context, R.font.noto_sans_arabic_digits)
+            fontFamily == WidgetFontFamily.GOOGLE_SANS || fontFamily == WidgetFontFamily.GOOGLE_SANS_NORMAL -> ResourcesCompat.getFont(context, R.font.google_sans_flex)
+            fontFamily == WidgetFontFamily.SERIF -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                Typeface.create(Typeface.SERIF, weight, false)
+            } else {
+                Typeface.create(Typeface.SERIF, if (weight >= 600) Typeface.BOLD else Typeface.NORMAL)
+            }
+            fontFamily == WidgetFontFamily.MONOSPACE -> if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                Typeface.create(Typeface.MONOSPACE, weight, false)
+            } else {
+                Typeface.create(Typeface.MONOSPACE, if (weight >= 600) Typeface.BOLD else Typeface.NORMAL)
+            }
+            fontFamily == WidgetFontFamily.CURSIVE -> Typeface.create("cursive", Typeface.NORMAL)
+            else -> Typeface.SANS_SERIF
+        }
+        textSize = sizePx
+        textAlign = Paint.Align.LEFT
+        if (system == NumeralSystem.EASTERN_ARABIC) {
+            // Noto Sans Arabic is variable on `wght` only; there is no width axis, so a condensed
+            // treatment cannot apply here and asking for one would silently do nothing.
+            setFontVariationSettings("'wght' $weight")
+        } else {
+            fontFeatureSettings = "tnum, lnum"
+            setFontVariationSettings(
+                "'opsz' 144,'wdth' $width,'wght' $weight,'GRAD' 0,'ROND' $roundness"
+            )
+        }
+    }
+
+    /**
+     * The size to set so a string's ink is exactly [capPx] tall.
+     *
+     * Measured rather than derived from a constant. `ClockFace.DIGIT_EM` is 0.728, but that is a
+     * Google Sans Flex number: the Noto Arabic digits measure 0.691 em with `٨` descending 0.016 em
+     * below the baseline. Using the wrong one makes one numeral system visibly smaller than the
+     * others.
+     */
+    fun sizeForCap(paint: Paint, sample: String, capPx: Float): Float {
+        val r = Rect()
+        paint.textSize = 100f
+        paint.getTextBounds(sample, 0, sample.length, r)
+        val inkAt100 = r.height().toFloat().takeIf { it > 0f } ?: 72.8f
+        return 100f * capPx / inkAt100
+    }
+
+    /** Ink bounds of [text] at the paint's current size, the box the glyphs actually occupy. */
+    fun ink(paint: Paint, text: String, out: Rect = Rect()): Rect {
+        paint.getTextBounds(text, 0, text.length, out)
+        return out
+    }
+
+    /**
+     * The label for an hour, in the chosen system.
+     *
+     * Roman uses the **watch-dial** convention: `IIII` at four, not `IV`. It is not a mistake and
+     * it is not decoration. It balances `VIII` opposite it optically, and it makes the three
+     * quadrants read `I II III IIII` / `V VI VII VIII` / `IX X XI XII`, additive all the way to X.
+     * Built from ASCII I/V/X rather than the Unicode numeral forms at U+2160, which Google Sans
+     * Flex does not contain and which have no precomposed `IIII` in any case.
+     */
+    fun label(hour: Int, system: NumeralSystem): String {
+        val h = ((hour - 1).mod(12)) + 1
+        return when (system) {
+            NumeralSystem.NONE -> ""
+            NumeralSystem.ARABIC -> h.toString()
+            NumeralSystem.ROMAN -> ROMAN[h - 1]
+            NumeralSystem.EASTERN_ARABIC -> h.toString().map { EASTERN[it - '0'] }.joinToString("")
+        }
+    }
+
+    /** The widest string the system will ever put on a dial. The collision clamp measures it. */
+    fun widest(system: NumeralSystem): String = when (system) {
+        NumeralSystem.NONE -> ""
+        NumeralSystem.ARABIC -> "12"
+        NumeralSystem.ROMAN -> "VIII"
+        NumeralSystem.EASTERN_ARABIC -> "١٢"
+    }
+
+    private val ROMAN = arrayOf(
+        "I", "II", "III", "IIII", "V", "VI", "VII", "VIII", "IX", "X", "XI", "XII",
+    )
+
+    /** U+0660 ARABIC-INDIC DIGIT ZERO … NINE. */
+    private val EASTERN = CharArray(10) { (0x0660 + it).toChar() }
+}
+```
