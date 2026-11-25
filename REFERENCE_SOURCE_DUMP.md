@@ -4394,3 +4394,1796 @@ internal fun worldClockSnapTarget(progress: Float, velocity: Float): Float = whe
     else -> 0f
 }
 ```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/sheets/PillDial.kt`
+
+```kotlin
+package app.expressiveclock.ui.sheets
+
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TimePickerSelectionMode
+import androidx.compose.material3.TimePickerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.drawText
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.dp
+import app.expressiveclock.ui.theme.ClockFace
+import kotlin.math.PI
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.max
+import kotlin.math.sin
+import kotlin.math.sqrt
+
+/** A full circular alarm-time dial, intentionally matching the stopwatch face. */
+@Composable
+fun PillDial(
+    state: TimePickerState,
+    modifier: Modifier = Modifier,
+    onHourPicked: () -> Unit = {},
+) {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val minutes = state.selection == TimePickerSelectionMode.Minute
+    val rings = if (!minutes && state.is24hour) 2 else 1
+    val dialColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = .74f)
+    val ink = MaterialTheme.colorScheme.onSurface
+    val accent = MaterialTheme.colorScheme.primary
+    val onAccent = MaterialTheme.colorScheme.onPrimary
+    val labelStyle = remember(density) {
+        ClockFace.numerals(capHeight = 15.dp, width = 105f, weight = 520, tabular = false)
+    }
+    val label = if (minutes) "minutes" else "hour"
+
+    Canvas(
+        modifier = modifier
+            .fillMaxWidth()
+            .aspectRatio(1f)
+            .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(MaterialTheme.colorScheme.surfaceContainerLow.copy(alpha = .93f), androidx.compose.foundation.shape.CircleShape)
+            .border(1.25.dp, Color.White.copy(alpha = .86f), androidx.compose.foundation.shape.CircleShape)
+            .semantics {
+                contentDescription = "Pick the $label. Currently " +
+                    if (minutes) "${state.minute} minutes" else "${state.hour} o'clock"
+            }
+            .pointerInput(minutes, rings, state.is24hour) {
+                detectTapGestures { p -> applyCircular(state, p, size.width.toFloat(), size.height.toFloat(), rings, minutes, onHourPicked) }
+            }
+            .pointerInput(minutes, rings, state.is24hour) {
+                detectDragGestures(
+                    onDragEnd = { if (!minutes) onHourPicked() },
+                ) { change, _ ->
+                    applyCircular(state, change.position, size.width.toFloat(), size.height.toFloat(), rings, minutes, null)
+                }
+            },
+    ) {
+        val diameter = minOf(size.width, size.height)
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val radius = diameter / 2f
+        drawCircle(color = dialColor, radius = radius)
+
+        val ringStep = radius * .19f
+        val selectedRadius = if (rings == 2 && state.hour >= 12) radius * .57f else radius * .72f
+        val selectedAngle = if (minutes) state.minute * PI.toFloat() / 30f else (state.hour % 12) * PI.toFloat() / 6f
+        val tip = Offset(
+            center.x + sin(selectedAngle) * selectedRadius,
+            center.y - cos(selectedAngle) * selectedRadius,
+        )
+        drawLine(accent, center, tip, strokeWidth = 3.dp.toPx(), cap = StrokeCap.Round)
+        drawCircle(accent, 4.dp.toPx(), center)
+        drawCircle(accent, 16.dp.toPx(), tip)
+
+        if (!minutes) {
+            val outerR = radius * .72f
+            for (i in 0 until 12) {
+                val value = if (i == 0) 12 else i
+                val angle = i * PI.toFloat() / 6f
+                drawDialLabel(
+                    value.toString(),
+                    center,
+                    outerR,
+                    angle,
+                    measurer,
+                    labelStyle,
+                    if (value == currentHourValue(state)) onAccent else ink,
+                    value == currentHourValue(state),
+                )
+            }
+            if (rings == 2) {
+                val innerR = radius * .53f
+                for (i in 0 until 12) {
+                    val value = if (i == 0) 24 else i + 12
+                    val angle = i * PI.toFloat() / 6f
+                    drawDialLabel(
+                        if (value == 24) "00" else value.toString(),
+                        center,
+                        innerR,
+                        angle,
+                        measurer,
+                        labelStyle,
+                        if (valueMatchesHour(state.hour, value)) onAccent else ink,
+                        valueMatchesHour(state.hour, value),
+                    )
+                }
+            }
+        } else {
+            val minuteValue = state.minute
+            val outerR = radius * .72f
+            for (i in 0 until 12) {
+                val value = i * 5
+                val angle = i * PI.toFloat() / 6f
+                drawDialLabel(
+                    "%02d".format(value),
+                    center,
+                    outerR,
+                    angle,
+                    measurer,
+                    labelStyle,
+                    if (value == minuteValue) onAccent else ink,
+                    value == minuteValue,
+                )
+            }
+        }
+    }
+}
+
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawDialLabel(
+    text: String,
+    center: Offset,
+    radius: Float,
+    angle: Float,
+    measurer: androidx.compose.ui.text.TextMeasurer,
+    style: androidx.compose.ui.text.TextStyle,
+    color: androidx.compose.ui.graphics.Color,
+    selected: Boolean,
+) {
+    val laid = measurer.measure(text, style)
+    val x = center.x + sin(angle) * radius - laid.size.width / 2f
+    val y = center.y - cos(angle) * radius - laid.size.height / 2f
+    drawText(laid, color, Offset(x, y))
+}
+
+private fun currentHourValue(state: TimePickerState): Int = if (state.is24hour) state.hour else (state.hour % 12).let { if (it == 0) 12 else it }
+
+private fun valueMatchesHour(hour: Int, value: Int): Boolean = when (value) {
+    24 -> hour == 0
+    else -> hour == value
+}
+
+private fun applyCircular(
+    state: TimePickerState,
+    at: Offset,
+    w: Float,
+    h: Float,
+    rings: Int,
+    minutes: Boolean,
+    onHourPicked: (() -> Unit)?,
+) {
+    val centerX = w / 2f
+    val centerY = h / 2f
+    val dx = at.x - centerX
+    val dy = at.y - centerY
+    if (dx * dx + dy * dy < 1f) return
+
+    var turns = atan2(dx, -dy) / (2f * PI.toFloat())
+    if (turns < 0f) turns += 1f
+    val index = ((turns * 12f) + .5f).toInt() % 12
+
+    if (minutes) {
+        state.minute = index * 5
+        return
+    }
+
+    if (rings == 2 && sqrt(dx * dx + dy * dy) < (minOf(w, h) / 2f) * .64f) {
+        state.hour = if (index == 0) 0 else index + 12
+    } else {
+        state.hour = if (index == 0) 12 else index
+    }
+    onHourPicked?.invoke()
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/theme/ClockFace.kt`
+
+```kotlin
+package app.expressiveclock.ui.theme
+
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontVariation
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontSynthesis
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFontFamilyResolver
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
+import androidx.compose.ui.unit.sp
+import app.expressiveclock.R
+
+/**
+ * The clock's numerals: **Google Sans Flex, driven on its own axes.** No custom glyphs.
+ *
+ * ## What this replaces, and why the first attempt was wrong
+ *
+ * The M3 Expressive research-concept clock sets its alarm times in a face whose `0` is about one
+ * fifth as wide as it is tall. An earlier build concluded no licensable font could do that and
+ * hand-drew ten digits as vector paths. That was wrong twice over.
+ *
+ * First, Google Sans Flex went open-source in 2025 (`docs/m3/library/google-sans-flex-font.md`)
+ * and has **six axes**: weight, width, optical size, slant, grade and roundedness. The reason the
+ * earlier measurement missed `wdth` is that `tools/build_gsflex.py`'s predecessor asked
+ * `fonts.googleapis.com` for `opsz,wght` only, and gstatic answers such a request with a *partial
+ * instance*: the other four axes are flattened to their defaults and struck from `fvar`. The font
+ * in the APK genuinely had two axes. The font Google ships has six.
+ *
+ * Measured on the correctly-built binary, the `0` glyph gives:
+ *
+ * | `wdth` | `wght` | ink w/h | matches |
+ * |---|---|---|---|
+ * | 25 | 250 | 0.234 | the concept's alarm tiles (~0.20) |
+ * | 100 | 250 | 0.699 | the concept's Plank timer (~0.72) |
+ *
+ * So the two cuts the concept uses are one font at two width settings, and there was never
+ * anything to draw.
+ *
+ * Second, the *off* state is not an outline. Magnifying a disarmed stem shows a single uniform
+ * stroke with no inner contour: it is a **lighter weight of the same face**. The earlier "proof"
+ * of outlining was a bad test: scanning across a `0` gives stroke-hole-stroke for any zero, because
+ * a zero has a counter. State lives on the `wght` axis, which is what a variable font is for.
+ */
+object ClockFace {
+
+    /** Ultra-condensed, for the alarm grid. */
+    const val CONDENSED = 25f
+
+    /** Normal width, for body text and labels. */
+    const val NORMAL = 100f
+
+    /**
+     * The timer and stopwatch readout, measured off the concept's Plank screen: a `0` that is
+     * 0.66 as wide as it is tall with a stroke 0.139 of the cap, plus a **slashed zero**, which
+     * Google Sans Flex ships as the `zero` OpenType feature. Far heavier than the alarm grid's off
+     * state, which is what an earlier build wrongly reused here.
+     */
+    const val TIMER_WIDTH = 95f
+    const val TIMER_WEIGHT = 490
+
+    /**
+     * Armed. Measured, not picked: the armed stem measures 0.0639 of the cap height in the render,
+     * and this binary hits it at `wght` 261 with `opsz` 144 / `wdth` 25 (Brent-solved, then
+     * verified by two independent rasterisers). The value is opsz-dependent, so do not quote it
+     * without opsz=144.
+     */
+    const val WEIGHT_ON = 260
+
+    /**
+     * Disarmed. The off stem measures 0.0306 of the cap, almost exactly half the armed weight,
+     * which solves to `wght` 119. A light weight at display size is explicitly sanctioned by the
+     * spec, so this is not a hack: it is the documented use of the axis.
+     */
+    const val WEIGHT_OFF = 120
+
+    /**
+     * Digit ink height as a fraction of the em, measured off the bundled binary
+     * (1455/2000 at `wdth` 25). Converts a wanted cap height into a font size.
+     */
+    const val DIGIT_EM = 0.728f
+
+    /**
+     * Distance from a text box's top edge down to the top of a digit, in em.
+     *
+     * `hhea.ascent` is 0.966 em and a digit reaches 0.728 em above the baseline, so with
+     * `includeFontPadding = false` the ink starts 0.238 em below the box top. [Numerals] offsets
+     * by exactly this, which is what makes a numeral's layout box equal to its ink.
+     */
+    const val INK_TOP_EM = 0.966f - DIGIT_EM
+
+    fun fontSizeFor(capHeight: Dp): Dp = capHeight / DIGIT_EM
+
+    /**
+     * Capital cap height as a fraction of the em: `OS/2.sCapHeight` = 1432/2000, corroborated by
+     * the flat capitals T, M, W, F and H all measuring exactly 1432 units. ('S' is 1475, because
+     * round letters overshoot, which is why a single sampled glyph is the wrong thing to
+     * calibrate on.)
+     *
+     * This was 0.604 for a while, read off a screenshot of the meridiem whose segmentation was
+     * wrong. Everything sized through here came out 19% too big, which is how the day letters
+     * ended up 38.5 dp tall next to a 32 dp switch.
+     */
+    private const val CAPITAL_EM = 0.716f
+
+    /** Distance from a text box's top down to a capital's top, in em. */
+    const val CAPITAL_INK_TOP_EM = 0.966f - CAPITAL_EM
+
+    fun capitalSizeFor(capHeight: Dp): Dp = capHeight / CAPITAL_EM
+
+    private val cache = HashMap<Int, FontFamily>()
+
+    /** Google Sans Flex pinned to one point in axis space. */
+    fun family(
+        opticalSize: Float,
+        width: Float = NORMAL,
+        weight: Int = 400,
+        grade: Float = 0f,
+        roundness: Float = 0f,
+    ): FontFamily {
+        val key = (opticalSize.toInt() * 31 + width.toInt()) * 31 * 31 +
+            weight * 31 + grade.toInt() * 7 + roundness.toInt()
+        return cache.getOrPut(key) {
+            FontFamily(
+                Font(
+                    resId = R.font.google_sans_flex,
+                    weight = FontWeight(weight.coerceIn(1, 1000)),
+                    variationSettings = FontVariation.Settings(
+                        FontVariation.Setting("opsz", opticalSize.coerceIn(6f, 144f)),
+                        FontVariation.Setting("wdth", width.coerceIn(25f, 151f)),
+                        FontVariation.Setting("wght", weight.coerceIn(1, 1000).toFloat()),
+                        FontVariation.Setting("GRAD", grade.coerceIn(0f, 100f)),
+                        FontVariation.Setting("ROND", roundness.coerceIn(0f, 100f)),
+                    ),
+                ),
+            )
+        }
+    }
+
+    /**
+     * A numeral style whose box hugs the glyphs.
+     *
+     * `includeFontPadding = false` plus a trimmed line height is what makes the box predictable:
+     * left as-is, Android adds the font's own ascent/descent padding and every measurement taken
+     * off the concept renders lands in the wrong place by a different amount at each size.
+     */
+    /** The meridiem's style, exposed so a caller can measure it before deciding its tracking. */
+    fun capitals(capHeight: Dp, width: Float = 75f, weight: Int = 500, tracking: Float = 0f): TextStyle {
+        val size = capitalSizeFor(capHeight)
+        return TextStyle(
+            fontFamily = family(opticalSize = size.value, width = width, weight = weight),
+            fontSize = size.value.sp,
+            letterSpacing = tracking.em,
+            platformStyle = PlatformTextStyle(includeFontPadding = false),
+        )
+    }
+
+    const val ROUNDED = 100f
+
+    fun numerals(
+        capHeight: Dp,
+        width: Float,
+        weight: Int,
+        tabular: Boolean = true,
+        tracking: Float = 0f,
+        slashedZero: Boolean = false,
+        roundness: Float = 0f,
+    ): TextStyle = TextStyle(
+        // opsz tracks the type size, clamped at the font's 144 max. Every one of the 30
+        // documented styles sets opsz equal to its point size; the Do is explicit.
+        fontFamily = family(
+            opticalSize = fontSizeFor(capHeight).value,
+            width = width,
+            weight = weight,
+            roundness = roundness,
+        ),
+        fontSize = fontSizeFor(capHeight).value.sp,
+        letterSpacing = tracking.em,
+        /*
+         * Tabular by default, and the alarm grid uses it too.
+         *
+         * An earlier version of this comment argued the opposite, claiming tabular was right for a
+         * ticking stopwatch but wrong for a static alarm time, because the concept's tiles look
+         * proportional and forcing tabular "pads every 1 out to a zero's width". Measured against
+         * this binary at `wdth` 25, that last claim is simply not true: `one.tf` has 301 units of
+         * ink against `zero.tf`'s 344, so a tabular 1 here is 88% as wide as a 0, not half. At this
+         * width the tabular 1 carries a full flag and reads as a digit, not as a stick in a box.
+         *
+         * What proportional actually costs is measurable and large. Digit advances at `wdth` 25
+         * run from 324 (`1`) to 449 (`8`), a 39% spread, so a four-digit time varies from 0.645
+         * to 0.820 em. On a 174 dp tile that is a 45 dp swing in the block's width, which lands as
+         * a 22.6 dp swing in the side margins from one tile to the next. Tabular makes every time
+         * exactly one width, which is the only way a *grid* of times can line up with itself.
+         */
+        fontFeatureSettings = buildString {
+            append(if (tabular) "tnum, lnum" else "pnum, lnum")
+            // The concept's timer digits are slashed zeros. `zero` is a real feature on this
+            // binary, so this is the font's own alternate rather than anything drawn.
+            if (slashedZero) append(", zero")
+        },
+        // Leaving this on adds the font's own ascent/descent padding, and every measurement taken
+        // off the concept renders then lands wrong by a different amount at each size.
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
+    )
+
+    /**
+     * Optical tracking for the condensed cut, in em, applied to **every** element of a time:
+     * hour, minutes and meridiem alike.
+     *
+     * One value on purpose. An earlier version measured the minutes and solved a per-element
+     * tracking so the meridiem justified to their exact width, which is what the render does; it
+     * also meant the letter fit changed depending on which digits were showing, and that reads as
+     * sloppy rather than as precise. A single em value keeps the fit identical everywhere and
+     * scales with each element's own size for free.
+     *
+     * The spec sets tracking to 0 across the scale, so this is an optical correction and not spec.
+     * It is needed because this binary at `wdth` 25 advances about 0.30 of cap height per digit
+     * where the render's face advances 0.22; the ink matches, the side bearings do not.
+     */
+    /**
+     * The last nudge to the tracking, kept as its own term rather than folded into the number
+     * below, because the alarm tile subtracts exactly twice it from the gap between the hour and
+     * the minutes. Widening the digit gaps and narrowing the block gap by the same total keeps the
+     * time the width it was; burying the delta would make that relationship impossible to see, and
+     * the next person to adjust one would silently break the other.
+     */
+    const val TRACKING_DELTA = 0.004f
+    const val CONDENSED_TRACKING = -0.014f + TRACKING_DELTA
+
+}
+
+/**
+ * The horizontal ink bounds of [text] in [style], in pixels: the offset from the pen origin to the
+ * first ink, and the width of the ink itself.
+ *
+ * Compose reports *advance* widths, which include each glyph's side bearings. At `wdth` 25 those
+ * are not a rounding error. This face advances about 0.30 of the cap per digit where its ink is
+ * 0.22 wide, so a numeral laid out at x = 0 has its first stroke some way inside its own box.
+ * Anything that has to sit flush against an edge, or be fitted to an exact width, needs the ink.
+ *
+ * `Paint.getTextBounds` is the only API that gives it. The Typeface comes from Compose's own
+ * resolver, so the variation settings baked into the family (the whole point of this file) are
+ * the ones measured; constructing a Typeface by hand here would silently measure `wdth` 100.
+ */
+class InkBounds(val left: Float, val width: Float, val advance: Float) {
+    /** Distance from the last ink to the end of the reserved box. */
+    val right: Float get() = advance - left - width
+}
+
+@Composable
+fun rememberInkBounds(text: String, style: TextStyle): InkBounds {
+    val resolver = LocalFontFamilyResolver.current
+    val density = LocalDensity.current
+    return remember(text, style, density) { inkBounds(resolver, density, text, style) }
+}
+
+/**
+ * The measuring half of [rememberInkBounds], callable outside composition.
+ *
+ * Exposed so a caller can *solve* against it, bisecting a variable-font axis until a string
+ * measures the width it has to be. That needs many measurements per frame and so cannot be a
+ * `@Composable` loop.
+ */
+fun inkBounds(
+    resolver: FontFamily.Resolver,
+    density: Density,
+    text: String,
+    style: TextStyle,
+): InkBounds {
+    return run {
+        val typeface = resolver.resolve(
+            fontFamily = style.fontFamily,
+            fontWeight = style.fontWeight ?: FontWeight.Normal,
+            fontStyle = FontStyle.Normal,
+            fontSynthesis = FontSynthesis.All,
+        ).value as android.graphics.Typeface
+        val paint = android.graphics.Paint().apply {
+            this.typeface = typeface
+            textSize = with(density) { style.fontSize.toPx() }
+            letterSpacing = style.letterSpacing.value
+            // **Including the feature settings.** Leaving these off measured the font's default
+            // figures while the caller rendered `tnum` ones, and at `wdth` 25 those are not close:
+            // a tabular zero advances 472 units against a proportional 438. Every advance and every
+            // bearing this returns was then ~7% adrift from what would actually be drawn, which is
+            // invisible until something tries to fit ink to an edge with it.
+            fontFeatureSettings = style.fontFeatureSettings
+            isAntiAlias = true
+        }
+        val r = android.graphics.Rect()
+        paint.getTextBounds(text, 0, text.length, r)
+        // Left bearing, ink width, and the advance the layout will actually reserve. The third is
+        // what lets a caller work out the *right* bearing, which is the other half of centring ink.
+        InkBounds(r.left.toFloat(), r.width().toFloat(), paint.measureText(text))
+    }
+}
+
+/**
+ * A numeral whose layout box **is its ink**, with no ascent above and no descent below.
+ *
+ * Digits have no descender and their tops are all one height, so a box clipped to exactly the cap
+ * height is honest. It is also what makes composition possible: two numerals at different sizes
+ * top-align by simply sitting in a `Row`, with no magic offset, because neither carries invisible
+ * padding that scales with its font size. That invisible padding is what "nothing is aligned
+ * correctly" actually was.
+ */
+/**
+ * Capitals in an ink-tight box, for the meridiem.
+ *
+ * It needs the same treatment as [Numerals] for the same reason, and here the reason is exact: the
+ * render composes minutes cap + gap + AM cap to equal the hour's cap, i.e. the AM sits on the
+ * hour's baseline. A text box carrying its own ascent and descent makes that sum impossible to
+ * hit, and the whole tile's content then measures taller than the hour and floats upward.
+ */
+@Composable
+fun CapText(
+    text: String,
+    capHeight: Dp,
+    color: Color,
+    modifier: Modifier = Modifier,
+    width: Float = 75f,
+    weight: Int = 500,
+    tracking: Float = 0f,
+) {
+    val style = ClockFace.capitals(capHeight, width, weight, tracking).copy(color = color)
+    InkTight(text, style, capHeight, modifier)
+}
+
+/**
+ * Capitals set to an exact cap height and squeezed to an exact width.
+ *
+ * For the alarm tiles' day letters, which have to stand as tall as the 32 dp switch beside them
+ * while seven of them share about 78 dp. That cannot be done on the width axis: even at the `wdth`
+ * 25 floor, "SMTWTFS" at a 32 dp cap measures 120 dp. So the axis goes to its floor first and a
+ * horizontal scale closes the rest. Unlike an outlined numeral, where a squeeze thins the
+ * verticals and leaves the horizontals alone, these are small solid glyphs where it does not show.
+ *
+ * A transform does not change layout width, so the reported width is scaled here too; otherwise
+ * the row would claim 120 dp and shove the switch off the tile.
+ */
+@Composable
+fun StretchedCaps(
+    text: String,
+    capHeight: Dp,
+    color: Color,
+    scaleX: Float,
+    modifier: Modifier = Modifier,
+    width: Float = ClockFace.CONDENSED,
+    weight: Int = 600,
+) {
+    val style = ClockFace.capitals(capHeight, width, weight).copy(color = color)
+    StretchedCaps(AnnotatedString(text), style, capHeight, scaleX, modifier)
+}
+
+/**
+ * The same squeeze, over a string whose runs carry their own styling.
+ *
+ * This is the one the day letters use. Setting seven letters as **one** text run rather than seven
+ * boxed ones is what makes their spacing the font's own: the shaper applies each glyph's side
+ * bearings and any kerning pair between them, which is precisely the thing that "is the kerning
+ * between each day consistent?" is asking about. Seven separate boxes cannot kern across a box
+ * boundary, and any per-letter cell width invented to stand in for that is a worse guess than the
+ * one the type designer already made.
+ *
+ * [scaleX] is then derived from the measured run by squeezing the whole line to the block's width,
+ * so tracking and letterform are squeezed by the same factor and the relative fit never changes.
+ */
+@Composable
+fun StretchedCaps(
+    text: AnnotatedString,
+    style: TextStyle,
+    capHeight: Dp,
+    scaleX: Float,
+    modifier: Modifier = Modifier,
+) {
+    val measurer = rememberTextMeasurer()
+    val layout = remember(text, style) { measurer.measure(text, style) }
+    Layout(
+        content = {
+            BasicText(
+                text = text,
+                style = style,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier.graphicsLayer {
+                    this.scaleX = scaleX
+                    transformOrigin = TransformOrigin(0f, 0.5f)
+                },
+            )
+        },
+        modifier = modifier,
+    ) { measurables, _ ->
+        val placeable = measurables.first().measure(
+            Constraints(maxWidth = Constraints.Infinity, maxHeight = Constraints.Infinity),
+        )
+        val inkTop = (layout.firstBaseline - capHeight.toPx()).toInt()
+        // A transform does not change layout width, so the reported width is scaled here too;
+        // otherwise the row claims its unsqueezed width and shoves the switch off the tile.
+        layout((placeable.width * scaleX).toInt(), capHeight.roundToPx()) {
+            placeable.place(0, -inkTop)
+        }
+    }
+}
+
+@Composable
+fun Numerals(
+    text: String,
+    capHeight: Dp,
+    color: Color,
+    modifier: Modifier = Modifier,
+    width: Float = ClockFace.NORMAL,
+    weight: Int = ClockFace.WEIGHT_ON,
+    tabular: Boolean = true,
+    tracking: Float = 0f,
+    slashedZero: Boolean = false,
+    roundness: Float = 0f,
+) {
+    val style = ClockFace.numerals(capHeight, width, weight, tabular, tracking, slashedZero, roundness)
+        .copy(color = color)
+    InkTight(text, style, capHeight, modifier)
+}
+
+/**
+ * Lays text out so its **layout box is exactly the ink**: cap height, nothing above, nothing below.
+ *
+ * The offset comes from [TextLayoutResult.firstBaseline], measured, rather than from an assumed
+ * ascent. Deriving it from `hhea.ascent` looked right and was not: it put the alarm tiles' day
+ * letters about 5 dp below the switch they were supposed to line up with, because whatever
+ * `includeFontPadding = false` actually uses for the first line's top is not that number. A
+ * measured baseline needs no assumption at all, since ink top is simply `baseline − capHeight`.
+ */
+@Composable
+private fun InkTight(text: String, style: TextStyle, capHeight: Dp, modifier: Modifier) {
+    val measurer = rememberTextMeasurer()
+    val layout = remember(text, style) { measurer.measure(text, style) }
+    Layout(
+        content = { BasicText(text = text, style = style, maxLines = 1, softWrap = false) },
+        modifier = modifier,
+    ) { measurables, _ ->
+        // Unbounded: a text box is taller than its ink, and handing it the reported height would
+        // squeeze the glyphs into half the space they need.
+        val placeable = measurables.first().measure(
+            Constraints(maxWidth = Constraints.Infinity, maxHeight = Constraints.Infinity),
+        )
+        val inkTop = (layout.firstBaseline - capHeight.toPx()).toInt()
+        layout(placeable.width, capHeight.roundToPx()) { placeable.place(0, -inkTop) }
+    }
+}
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/theme/Palettes.kt`
+
+```kotlin
+package app.expressiveclock.ui.theme
+
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.ui.graphics.Color
+
+/**
+ * GENERATED. Do not hand-edit. Regenerate with `tools/gen_palettes.py`.
+ *
+ * The app's selectable palettes are intentionally distinct. Concept uses a teal-forward scheme
+ * to match the concept's visual language, while the remaining palettes provide clearly different
+ * accent families for users who want to customise the app.
+ *
+ */
+enum class Palette(val displayName: String, val light: ColorScheme, val dark: ColorScheme) {
+
+    CONCEPT(
+        "Concept",
+        lightColorScheme(
+            primary = Color(0xFF006874),
+            onPrimary = Color(0xFFFFFFFF),
+            primaryContainer = Color(0xFF97F0FF),
+            onPrimaryContainer = Color(0xFF001F24),
+            inversePrimary = Color(0xFF4FD8EB),
+            secondary = Color(0xFF4A6267),
+            onSecondary = Color(0xFFFFFFFF),
+            secondaryContainer = Color(0xFFCDE7EC),
+            onSecondaryContainer = Color(0xFF051F24),
+            tertiary = Color(0xFF4F635D),
+            onTertiary = Color(0xFFFFFFFF),
+            tertiaryContainer = Color(0xFFD1E8E1),
+            onTertiaryContainer = Color(0xFF0C1F1B),
+            background = Color(0xFFF5FAFB),
+            onBackground = Color(0xFF171D1E),
+            surface = Color(0xFFF5FAFB),
+            onSurface = Color(0xFF171D1E),
+            surfaceVariant = Color(0xFFDBE4E6),
+            onSurfaceVariant = Color(0xFF3F484A),
+            surfaceTint = Color(0xFF006874),
+            inverseSurface = Color(0xFF2C3133),
+            inverseOnSurface = Color(0xFFECF2F3),
+            error = Color(0xFFBA1A1A),
+            onError = Color(0xFFFFFFFF),
+            errorContainer = Color(0xFFFFDAD6),
+            onErrorContainer = Color(0xFF410002),
+            outline = Color(0xFF6F797A),
+            outlineVariant = Color(0xFFBFC8CA),
+            scrim = Color(0xFF000000),
+            surfaceBright = Color(0xFFF5FAFB),
+            surfaceDim = Color(0xFFD5DBDC),
+            surfaceContainer = Color(0xFFE9EFF0),
+            surfaceContainerHigh = Color(0xFFE3E9EA),
+            surfaceContainerHighest = Color(0xFFDDE4E5),
+            surfaceContainerLow = Color(0xFFEFF4F5),
+            surfaceContainerLowest = Color(0xFFFFFFFF),
+            primaryFixed = Color(0xFF97F0FF),
+            primaryFixedDim = Color(0xFF4FD8EB),
+            onPrimaryFixed = Color(0xFF001F24),
+            onPrimaryFixedVariant = Color(0xFF004F58),
+            secondaryFixed = Color(0xFFCDE7EC),
+            secondaryFixedDim = Color(0xFFB1CBD0),
+            onSecondaryFixed = Color(0xFF051F24),
+            onSecondaryFixedVariant = Color(0xFF334B50),
+            tertiaryFixed = Color(0xFFD1E8E1),
+            tertiaryFixedDim = Color(0xFFB5CCC5),
+            onTertiaryFixed = Color(0xFF0C1F1B),
+            onTertiaryFixedVariant = Color(0xFF374A45),
+        ),
+        darkColorScheme(
+            primary = Color(0xFF4FD8EB),
+            onPrimary = Color(0xFF00363D),
+            primaryContainer = Color(0xFF004F58),
+            onPrimaryContainer = Color(0xFF97F0FF),
+            inversePrimary = Color(0xFF006874),
+            secondary = Color(0xFFB1CBD0),
+            onSecondary = Color(0xFF1C3438),
+            secondaryContainer = Color(0xFF334B50),
+            onSecondaryContainer = Color(0xFFCDE7EC),
+            tertiary = Color(0xFFB5CCC5),
+            onTertiary = Color(0xFF21332F),
+            tertiaryContainer = Color(0xFF374A45),
+            onTertiaryContainer = Color(0xFFD1E8E1),
+            background = Color(0xFF0E1415),
+            onBackground = Color(0xFFE0E7E8),
+            surface = Color(0xFF0E1415),
+            onSurface = Color(0xFFE0E7E8),
+            surfaceVariant = Color(0xFF3F484A),
+            onSurfaceVariant = Color(0xFFBFC8CA),
+            surfaceTint = Color(0xFF4FD8EB),
+            inverseSurface = Color(0xFFE0E7E8),
+            inverseOnSurface = Color(0xFF2C3133),
+            error = Color(0xFFFFB4AB),
+            onError = Color(0xFF690005),
+            errorContainer = Color(0xFF93000A),
+            onErrorContainer = Color(0xFFFFDAD6),
+            outline = Color(0xFF899294),
+            outlineVariant = Color(0xFF3F484A),
+            scrim = Color(0xFF000000),
+            surfaceBright = Color(0xFF343A3B),
+            surfaceDim = Color(0xFF0E1415),
+            surfaceContainer = Color(0xFF1A2021),
+            surfaceContainerHigh = Color(0xFF242A2B),
+            surfaceContainerHighest = Color(0xFF2F3536),
+            surfaceContainerLow = Color(0xFF161C1D),
+            surfaceContainerLowest = Color(0xFF090F10),
+            primaryFixed = Color(0xFF97F0FF),
+            primaryFixedDim = Color(0xFF4FD8EB),
+            onPrimaryFixed = Color(0xFF001F24),
+            onPrimaryFixedVariant = Color(0xFF004F58),
+            secondaryFixed = Color(0xFFCDE7EC),
+            secondaryFixedDim = Color(0xFFB1CBD0),
+            onSecondaryFixed = Color(0xFF051F24),
+            onSecondaryFixedVariant = Color(0xFF334B50),
+            tertiaryFixed = Color(0xFFD1E8E1),
+            tertiaryFixedDim = Color(0xFFB5CCC5),
+            onTertiaryFixed = Color(0xFF0C1F1B),
+            onTertiaryFixedVariant = Color(0xFF374A45),
+        ),
+    ),
+    VIOLET(
+        "Violet",
+        lightColorScheme(
+        primary = Color(0xFF6850A5),
+        onPrimary = Color(0xFFFDF7FF),
+        primaryContainer = Color(0xFFCAB6FF),
+        onPrimaryContainer = Color(0xFF442C7F),
+        inversePrimary = Color(0xFFBBA2FE),
+        secondary = Color(0xFF4D6645),
+        onSecondary = Color(0xFFEBFFE0),
+        secondaryContainer = Color(0xFFD3F1C7),
+        onSecondaryContainer = Color(0xFF435B3C),
+        tertiary = Color(0xFF376B21),
+        onTertiary = Color(0xFFECFFDC),
+        tertiaryContainer = Color(0xFFC2FFA2),
+        onTertiaryContainer = Color(0xFF31641B),
+        background = Color(0xFFFFF7FF),
+        onBackground = Color(0xFF3D2A51),
+        surface = Color(0xFFFFF7FF),
+        onSurface = Color(0xFF3D2A51),
+        surfaceVariant = Color(0xFFEFDBFF),
+        onSurfaceVariant = Color(0xFF6B5681),
+        surfaceTint = Color(0xFF6850A5),
+        inverseSurface = Color(0xFF130A1E),
+        inverseOnSurface = Color(0xFFA697B2),
+        error = Color(0xFFAC3149),
+        onError = Color(0xFFFFF7F7),
+        errorContainer = Color(0xFFF76A80),
+        onErrorContainer = Color(0xFF68001F),
+        outline = Color(0xFF88729E),
+        outlineVariant = Color(0xFFC1A8D8),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFFFFF7FF),
+        surfaceDim = Color(0xFFE9D1FF),
+        surfaceContainer = Color(0xFFF7E9FF),
+        surfaceContainerHigh = Color(0xFFF3E2FF),
+        surfaceContainerHighest = Color(0xFFEFDBFF),
+        surfaceContainerLow = Color(0xFFFBF0FF),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        primaryFixed = Color(0xFFCAB6FF),
+        primaryFixedDim = Color(0xFFBEA5FF),
+        onPrimaryFixed = Color(0xFF2F1369),
+        onPrimaryFixedVariant = Color(0xFF4D3689),
+        secondaryFixed = Color(0xFFD3F1C7),
+        secondaryFixedDim = Color(0xFFC5E2BA),
+        onSecondaryFixed = Color(0xFF31492B),
+        onSecondaryFixedVariant = Color(0xFF4D6645),
+        tertiaryFixed = Color(0xFFC2FFA2),
+        tertiaryFixedDim = Color(0xFFB4F095),
+        onTertiaryFixed = Color(0xFF1E5107),
+        onTertiaryFixedVariant = Color(0xFF3B6F24),
+        ),
+        darkColorScheme(
+        primary = Color(0xFFD4C3FF),
+        onPrimary = Color(0xFF4A3A72),
+        primaryContainer = Color(0xFFC7B4F5),
+        onPrimaryContainer = Color(0xFF403168),
+        inversePrimary = Color(0xFF65568F),
+        secondary = Color(0xFFBBCBB2),
+        onSecondary = Color(0xFF364431),
+        secondaryContainer = Color(0xFF1C2918),
+        onSecondaryContainer = Color(0xFF98A990),
+        tertiary = Color(0xFFEDFFDF),
+        onTertiary = Color(0xFF376B21),
+        tertiaryContainer = Color(0xFFBFFCA0),
+        onTertiaryContainer = Color(0xFF2F6219),
+        background = Color(0xFF120B1A),
+        onBackground = Color(0xFFF1DFFF),
+        surface = Color(0xFF120B1A),
+        onSurface = Color(0xFFF1DFFF),
+        surfaceVariant = Color(0xFF2D203C),
+        onSurfaceVariant = Color(0xFFB7A4C7),
+        surfaceTint = Color(0xFFD4C3FF),
+        inverseSurface = Color(0xFFFFF7FF),
+        inverseOnSurface = Color(0xFF5B5163),
+        error = Color(0xFFFD6F85),
+        onError = Color(0xFF490013),
+        errorContainer = Color(0xFF8A1632),
+        onErrorContainer = Color(0xFFFF97A3),
+        outline = Color(0xFF7F6F90),
+        outlineVariant = Color(0xFF504260),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFF342545),
+        surfaceDim = Color(0xFF120B1A),
+        surfaceContainer = Color(0xFF1F152A),
+        surfaceContainerHigh = Color(0xFF261A33),
+        surfaceContainerHighest = Color(0xFF2D203C),
+        surfaceContainerLow = Color(0xFF181021),
+        surfaceContainerLowest = Color(0xFF000000),
+        primaryFixed = Color(0xFFC9B7F8),
+        primaryFixedDim = Color(0xFFBCAAEA),
+        onPrimaryFixed = Color(0xFF2D1D54),
+        onPrimaryFixedVariant = Color(0xFF4B3C74),
+        secondaryFixed = Color(0xFFE5F6DB),
+        secondaryFixedDim = Color(0xFFD7E8CD),
+        onSecondaryFixed = Color(0xFF3D4C38),
+        onSecondaryFixedVariant = Color(0xFF596953),
+        tertiaryFixed = Color(0xFFC2FFA2),
+        tertiaryFixedDim = Color(0xFFB4F095),
+        onTertiaryFixed = Color(0xFF1E5107),
+        onTertiaryFixedVariant = Color(0xFF3B6F24),
+        ),
+    ),
+    CORAL(
+        "Coral",
+        lightColorScheme(
+        primary = Color(0xFF9D414C),
+        onPrimary = Color(0xFFFFF7F6),
+        primaryContainer = Color(0xFFFFAAB0),
+        onPrimaryContainer = Color(0xFF701F2B),
+        inversePrimary = Color(0xFFFA8A94),
+        secondary = Color(0xFF3A656F),
+        onSecondary = Color(0xFFEEFBFF),
+        secondaryContainer = Color(0xFFC6F3FE),
+        onSecondaryContainer = Color(0xFF325D66),
+        tertiary = Color(0xFF006974),
+        onTertiary = Color(0xFFEBFCFF),
+        tertiaryContainer = Color(0xFF67ECFF),
+        onTertiaryContainer = Color(0xFF00555E),
+        background = Color(0xFFFFF8F7),
+        onBackground = Color(0xFF532420),
+        surface = Color(0xFFFFF8F7),
+        onSurface = Color(0xFF532420),
+        surfaceVariant = Color(0xFFFFDAD6),
+        onSurfaceVariant = Color(0xFF884F4A),
+        surfaceTint = Color(0xFF9D414C),
+        inverseSurface = Color(0xFF1E0706),
+        inverseOnSurface = Color(0xFFBE938E),
+        error = Color(0xFFAA371C),
+        onError = Color(0xFFFFF7F6),
+        errorContainer = Color(0xFFFA7150),
+        onErrorContainer = Color(0xFF671200),
+        outline = Color(0xFFA86A64),
+        outlineVariant = Color(0xFFE7A099),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFFFFF8F7),
+        surfaceDim = Color(0xFFFFCFCA),
+        surfaceContainer = Color(0xFFFFE9E6),
+        surfaceContainerHigh = Color(0xFFFFE2DE),
+        surfaceContainerHighest = Color(0xFFFFDAD6),
+        surfaceContainerLow = Color(0xFFFFF0EF),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        primaryFixed = Color(0xFFFFAAB0),
+        primaryFixedDim = Color(0xFFFF959E),
+        onPrimaryFixed = Color(0xFF530818),
+        onPrimaryFixedVariant = Color(0xFF7B2833),
+        secondaryFixed = Color(0xFFC6F3FE),
+        secondaryFixedDim = Color(0xFFB8E4EF),
+        onSecondaryFixed = Color(0xFF1D4A54),
+        onSecondaryFixedVariant = Color(0xFF3C6771),
+        tertiaryFixed = Color(0xFF67ECFF),
+        tertiaryFixedDim = Color(0xFF56DEF0),
+        onTertiaryFixed = Color(0xFF004148),
+        onTertiaryFixedVariant = Color(0xFF005F6A),
+        ),
+        darkColorScheme(
+        primary = Color(0xFFFFAEB4),
+        onPrimary = Color(0xFF682A31),
+        primaryContainer = Color(0xFFF59EA4),
+        onPrimaryContainer = Color(0xFF5C2128),
+        inversePrimary = Color(0xFF904A51),
+        secondary = Color(0xFFB2CBD1),
+        onSecondary = Color(0xFF2C4449),
+        secondaryContainer = Color(0xFF11292E),
+        onSecondaryContainer = Color(0xFF8FA8AE),
+        tertiary = Color(0xFFAEF4FF),
+        onTertiary = Color(0xFF005E68),
+        tertiaryContainer = Color(0xFF67ECFF),
+        onTertiaryContainer = Color(0xFF00555E),
+        background = Color(0xFF1B0907),
+        onBackground = Color(0xFFFFDEDA),
+        surface = Color(0xFF1B0907),
+        onSurface = Color(0xFFFFDEDA),
+        surfaceVariant = Color(0xFF3E1C19),
+        onSurfaceVariant = Color(0xFFD59E98),
+        surfaceTint = Color(0xFFFFAEB4),
+        inverseSurface = Color(0xFFFFF8F7),
+        inverseOnSurface = Color(0xFF6A4E4B),
+        error = Color(0xFFFE7453),
+        onError = Color(0xFF450900),
+        errorContainer = Color(0xFF881F05),
+        onErrorContainer = Color(0xFFFF9B82),
+        outline = Color(0xFF996964),
+        outlineVariant = Color(0xFF663D39),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFF48211D),
+        surfaceDim = Color(0xFF1B0907),
+        surfaceContainer = Color(0xFF2C1210),
+        surfaceContainerHigh = Color(0xFF351714),
+        surfaceContainerHighest = Color(0xFF3E1C19),
+        surfaceContainerLow = Color(0xFF230D0B),
+        surfaceContainerLowest = Color(0xFF000000),
+        primaryFixed = Color(0xFFFFAAB0),
+        primaryFixedDim = Color(0xFFF29CA2),
+        onPrimaryFixed = Color(0xFF4B141C),
+        onPrimaryFixedVariant = Color(0xFF713138),
+        secondaryFixed = Color(0xFFDBF5FC),
+        secondaryFixedDim = Color(0xFFCDE7EE),
+        onSecondaryFixed = Color(0xFF344C51),
+        onSecondaryFixedVariant = Color(0xFF51686E),
+        tertiaryFixed = Color(0xFF67ECFF),
+        tertiaryFixedDim = Color(0xFF56DEF0),
+        onTertiaryFixed = Color(0xFF004148),
+        onTertiaryFixedVariant = Color(0xFF005F6A),
+        ),
+    ),
+    EMBER(
+        "Ember",
+        lightColorScheme(
+        primary = Color(0xFF9B4620),
+        onPrimary = Color(0xFFFFF7F5),
+        primaryContainer = Color(0xFFFFAD8D),
+        onPrimaryContainer = Color(0xFF6D2501),
+        inversePrimary = Color(0xFFF98F63),
+        secondary = Color(0xFF446379),
+        onSecondary = Color(0xFFF5F9FF),
+        secondaryContainer = Color(0xFFC8E6FF),
+        onSecondaryContainer = Color(0xFF36556B),
+        tertiary = Color(0xFF00668C),
+        onTertiary = Color(0xFFF4F9FF),
+        tertiaryContainer = Color(0xFF60C6FB),
+        onTertiaryContainer = Color(0xFF003D55),
+        background = Color(0xFFFFF8F5),
+        onBackground = Color(0xFF50280B),
+        surface = Color(0xFFFFF8F5),
+        onSurface = Color(0xFF50280B),
+        surfaceVariant = Color(0xFFFFDBC8),
+        onSurfaceVariant = Color(0xFF855333),
+        surfaceTint = Color(0xFF9B4620),
+        inverseSurface = Color(0xFF1C0901),
+        inverseOnSurface = Color(0xFFBC957E),
+        error = Color(0xFFAC3434),
+        onError = Color(0xFFFFF7F6),
+        errorContainer = Color(0xFFF56965),
+        onErrorContainer = Color(0xFF65000B),
+        outline = Color(0xFFA56E4C),
+        outlineVariant = Color(0xFFE3A47E),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFFFFF8F5),
+        surfaceDim = Color(0xFFFFD0B6),
+        surfaceContainer = Color(0xFFFFEADF),
+        surfaceContainerHigh = Color(0xFFFFE3D4),
+        surfaceContainerHighest = Color(0xFFFFDBC8),
+        surfaceContainerLow = Color(0xFFFFF1EA),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        primaryFixed = Color(0xFFFFAD8D),
+        primaryFixedDim = Color(0xFFFF996F),
+        onPrimaryFixed = Color(0xFF4B1600),
+        onPrimaryFixedVariant = Color(0xFF792D08),
+        secondaryFixed = Color(0xFFC8E6FF),
+        secondaryFixedDim = Color(0xFFB8D8F2),
+        onSecondaryFixed = Color(0xFF234357),
+        onSecondaryFixedVariant = Color(0xFF405F75),
+        tertiaryFixed = Color(0xFF60C6FB),
+        tertiaryFixedDim = Color(0xFF50B8EC),
+        onTertiaryFixed = Color(0xFF002637),
+        onTertiaryFixedVariant = Color(0xFF004762),
+        ),
+        darkColorScheme(
+        primary = Color(0xFFFFBDA4),
+        onPrimary = Color(0xFF6E331A),
+        primaryContainer = Color(0xFFFFA987),
+        onPrimaryContainer = Color(0xFF622A11),
+        inversePrimary = Color(0xFF8F4D32),
+        secondary = Color(0xFFB7C9D9),
+        onSecondary = Color(0xFF31424F),
+        secondaryContainer = Color(0xFF162834),
+        onSecondaryContainer = Color(0xFF94A6B5),
+        tertiary = Color(0xFF85D2FF),
+        onTertiary = Color(0xFF004763),
+        tertiaryContainer = Color(0xFF60C6FB),
+        onTertiaryContainer = Color(0xFF003D55),
+        background = Color(0xFF1A0A02),
+        onBackground = Color(0xFFFFDFCE),
+        surface = Color(0xFF1A0A02),
+        onSurface = Color(0xFFFFDFCE),
+        surfaceVariant = Color(0xFF3C1E0A),
+        onSurfaceVariant = Color(0xFFD2A084),
+        surfaceTint = Color(0xFFFFBDA4),
+        inverseSurface = Color(0xFFFFF8F5),
+        inverseOnSurface = Color(0xFF695041),
+        error = Color(0xFFFF716C),
+        onError = Color(0xFF490006),
+        errorContainer = Color(0xFF8A1A1E),
+        onErrorContainer = Color(0xFFFF9993),
+        outline = Color(0xFF976C52),
+        outlineVariant = Color(0xFF643F28),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFF45230C),
+        surfaceDim = Color(0xFF1A0A02),
+        surfaceContainer = Color(0xFF2A1405),
+        surfaceContainerHigh = Color(0xFF331907),
+        surfaceContainerHighest = Color(0xFF3C1E0A),
+        surfaceContainerLow = Color(0xFF210E04),
+        surfaceContainerLowest = Color(0xFF000000),
+        primaryFixed = Color(0xFFFFAD8D),
+        primaryFixedDim = Color(0xFFF29F7E),
+        onPrimaryFixed = Color(0xFF491802),
+        onPrimaryFixedVariant = Color(0xFF6F341B),
+        secondaryFixed = Color(0xFFDBEDFE),
+        secondaryFixedDim = Color(0xFFCDDFEF),
+        onSecondaryFixed = Color(0xFF364753),
+        onSecondaryFixedVariant = Color(0xFF526371),
+        tertiaryFixed = Color(0xFF60C6FB),
+        tertiaryFixedDim = Color(0xFF50B8EC),
+        onTertiaryFixed = Color(0xFF002637),
+        onTertiaryFixedVariant = Color(0xFF004762),
+        ),
+    ),
+    CITRON(
+        "Citron",
+        lightColorScheme(
+        primary = Color(0xFF393F00),
+        onPrimary = Color(0xFFBCC757),
+        primaryContainer = Color(0xFFDFEB76),
+        onPrimaryContainer = Color(0xFF4F5600),
+        inversePrimary = Color(0xFFF0FC85),
+        secondary = Color(0xFF596384),
+        onSecondary = Color(0xFFFFFFFF),
+        secondaryContainer = Color(0xFFDBE1FF),
+        onSecondaryContainer = Color(0xFF475170),
+        tertiary = Color(0xFF4C5FB0),
+        onTertiary = Color(0xFFFFFFFF),
+        tertiaryContainer = Color(0xFFA6B5FF),
+        onTertiaryContainer = Color(0xFF1A2F7F),
+        background = Color(0xFFFDFFD8),
+        onBackground = Color(0xFF363B00),
+        surface = Color(0xFFFDFFD8),
+        onSurface = Color(0xFF363B00),
+        surfaceVariant = Color(0xFFE6F08C),
+        onSurfaceVariant = Color(0xFF616914),
+        surfaceTint = Color(0xFF393F00),
+        inverseSurface = Color(0xFF0D0F00),
+        inverseOnSurface = Color(0xFF9DA07B),
+        error = Color(0xFFB23D21),
+        onError = Color(0xFFFFFFFF),
+        errorContainer = Color(0xFFFA7150),
+        onErrorContainer = Color(0xFF671200),
+        outline = Color(0xFF7D862F),
+        outlineVariant = Color(0xFFB6C062),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFFFDFFD8),
+        surfaceDim = Color(0xFFDFEB75),
+        surfaceContainer = Color(0xFFF3F9B4),
+        surfaceContainerHigh = Color(0xFFECF4A0),
+        surfaceContainerHighest = Color(0xFFE6F08C),
+        surfaceContainerLow = Color(0xFFFAFEC6),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        primaryFixed = Color(0xFFDFEB76),
+        primaryFixedDim = Color(0xFFD1DD6A),
+        onPrimaryFixed = Color(0xFF3D4300),
+        onPrimaryFixedVariant = Color(0xFF586100),
+        secondaryFixed = Color(0xFFDBE1FF),
+        secondaryFixedDim = Color(0xFFC9D3F9),
+        onSecondaryFixed = Color(0xFF343E5D),
+        onSecondaryFixedVariant = Color(0xFF515B7B),
+        tertiaryFixed = Color(0xFFA6B5FF),
+        tertiaryFixedDim = Color(0xFF94A6FD),
+        onTertiaryFixed = Color(0xFF001761),
+        onTertiaryFixedVariant = Color(0xFF243888),
+        ),
+        darkColorScheme(
+        primary = Color(0xFFF8FFB6),
+        onPrimary = Color(0xFF5C631E),
+        primaryContainer = Color(0xFFE9F29B),
+        onPrimaryContainer = Color(0xFF545B16),
+        inversePrimary = Color(0xFF5C631E),
+        secondary = Color(0xFFC1C6DD),
+        onSecondary = Color(0xFF3A4052),
+        secondaryContainer = Color(0xFF202537),
+        onSecondaryContainer = Color(0xFF9EA3B9),
+        tertiary = Color(0xFFB8C3FF),
+        onTertiary = Color(0xFF253989),
+        tertiaryContainer = Color(0xFFA6B5FF),
+        onTertiaryContainer = Color(0xFF1A2F7F),
+        background = Color(0xFF0E0F08),
+        onBackground = Color(0xFFE6E8C0),
+        surface = Color(0xFF0E0F08),
+        onSurface = Color(0xFFE6E8C0),
+        surfaceVariant = Color(0xFF252713),
+        onSurfaceVariant = Color(0xFFABAE88),
+        surfaceTint = Color(0xFFF8FFB6),
+        inverseSurface = Color(0xFFFCFAEC),
+        inverseOnSurface = Color(0xFF56564C),
+        error = Color(0xFFFE7453),
+        onError = Color(0xFF450900),
+        errorContainer = Color(0xFF881F05),
+        onErrorContainer = Color(0xFFFF9B82),
+        outline = Color(0xFF757856),
+        outlineVariant = Color(0xFF474A2C),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFF2B2E15),
+        surfaceDim = Color(0xFF0E0F08),
+        surfaceContainer = Color(0xFF191A0E),
+        surfaceContainerHigh = Color(0xFF1F2111),
+        surfaceContainerHighest = Color(0xFF252713),
+        surfaceContainerLow = Color(0xFF13140A),
+        surfaceContainerLowest = Color(0xFF000000),
+        primaryFixed = Color(0xFFE1E994),
+        primaryFixedDim = Color(0xFFD2DB87),
+        onPrimaryFixed = Color(0xFF3D4300),
+        onPrimaryFixedVariant = Color(0xFF59601A),
+        secondaryFixed = Color(0xFFDDE1F9),
+        secondaryFixedDim = Color(0xFFCFD3EB),
+        onSecondaryFixed = Color(0xFF393F51),
+        onSecondaryFixedVariant = Color(0xFF555B6F),
+        tertiaryFixed = Color(0xFFA6B5FF),
+        tertiaryFixedDim = Color(0xFF94A6FD),
+        onTertiaryFixed = Color(0xFF001761),
+        onTertiaryFixedVariant = Color(0xFF243888),
+        ),
+    ),
+    FOREST(
+        "Forest",
+        lightColorScheme(
+        primary = Color(0xFF006E3D),
+        onPrimary = Color(0xFFE7FFEA),
+        primaryContainer = Color(0xFF97F7B6),
+        onPrimaryContainer = Color(0xFF005F34),
+        inversePrimary = Color(0xFF9AFAB9),
+        secondary = Color(0xFF7E5637),
+        onSecondary = Color(0xFFFFF7F4),
+        secondaryContainer = Color(0xFFFFDCC4),
+        onSecondaryContainer = Color(0xFF6F492B),
+        tertiary = Color(0xFF964A07),
+        onTertiary = Color(0xFFFFF7F4),
+        tertiaryContainer = Color(0xFFFFA363),
+        onTertiaryContainer = Color(0xFF5A2900),
+        background = Color(0xFFE8FFF0),
+        onBackground = Color(0xFF003A28),
+        surface = Color(0xFFE8FFF0),
+        onSurface = Color(0xFF003A28),
+        surfaceVariant = Color(0xFFB7EFD2),
+        onSurfaceVariant = Color(0xFF356953),
+        surfaceTint = Color(0xFF006E3D),
+        inverseSurface = Color(0xFF00120A),
+        inverseOnSurface = Color(0xFF87A394),
+        error = Color(0xFFAC3434),
+        onError = Color(0xFFFFF7F6),
+        errorContainer = Color(0xFFF56965),
+        onErrorContainer = Color(0xFF65000B),
+        outline = Color(0xFF51856D),
+        outlineVariant = Color(0xFF88BDA3),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFFE8FFF0),
+        surfaceDim = Color(0xFFAAE7C9),
+        surfaceContainer = Color(0xFFCDF8E1),
+        surfaceContainerHigh = Color(0xFFC2F3DA),
+        surfaceContainerHighest = Color(0xFFB7EFD2),
+        surfaceContainerLow = Color(0xFFD8FCE8),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        primaryFixed = Color(0xFF97F7B6),
+        primaryFixedDim = Color(0xFF89E8A9),
+        onPrimaryFixed = Color(0xFF004A27),
+        onPrimaryFixedVariant = Color(0xFF006A3B),
+        secondaryFixed = Color(0xFFFFDCC4),
+        secondaryFixedDim = Color(0xFFFFCAA3),
+        onSecondaryFixed = Color(0xFF5A371A),
+        onSecondaryFixedVariant = Color(0xFF7A5334),
+        tertiaryFixed = Color(0xFFFFA363),
+        tertiaryFixedDim = Color(0xFFF4944F),
+        onTertiaryFixed = Color(0xFF381700),
+        onTertiaryFixedVariant = Color(0xFF683000),
+        ),
+        darkColorScheme(
+        primary = Color(0xFFE9FFEB),
+        onPrimary = Color(0xFF2E6A45),
+        primaryContainer = Color(0xFFB9FACA),
+        onPrimaryContainer = Color(0xFF24623E),
+        inversePrimary = Color(0xFF2E6A45),
+        secondary = Color(0xFFE3C0A6),
+        onSecondary = Color(0xFF533B28),
+        secondaryContainer = Color(0xFF362110),
+        onSecondaryContainer = Color(0xFFBF9D85),
+        tertiary = Color(0xFFFFB687),
+        onTertiary = Color(0xFF693000),
+        tertiaryContainer = Color(0xFFFFA363),
+        onTertiaryContainer = Color(0xFF5A2900),
+        background = Color(0xFF02110A),
+        onBackground = Color(0xFFC7EFD9),
+        surface = Color(0xFF02110A),
+        onSurface = Color(0xFFC7EFD9),
+        surfaceVariant = Color(0xFF052C1E),
+        onSurfaceVariant = Color(0xFF8DB4A0),
+        surfaceTint = Color(0xFFE9FFEB),
+        inverseSurface = Color(0xFFE9FFF1),
+        inverseOnSurface = Color(0xFF46594F),
+        error = Color(0xFFFF716C),
+        onError = Color(0xFF490006),
+        errorContainer = Color(0xFF8A1A1E),
+        onErrorContainer = Color(0xFFFF9993),
+        outline = Color(0xFF597D6B),
+        outlineVariant = Color(0xFF2B4F3F),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFF063323),
+        surfaceDim = Color(0xFF02110A),
+        surfaceContainer = Color(0xFF031E14),
+        surfaceContainerHigh = Color(0xFF042519),
+        surfaceContainerHighest = Color(0xFF052C1E),
+        surfaceContainerLow = Color(0xFF02170E),
+        surfaceContainerLowest = Color(0xFF000000),
+        primaryFixed = Color(0xFFB0F1C2),
+        primaryFixedDim = Color(0xFFA3E3B5),
+        onPrimaryFixed = Color(0xFF034A28),
+        onPrimaryFixedVariant = Color(0xFF2A6742),
+        secondaryFixed = Color(0xFFFFDCC4),
+        secondaryFixedDim = Color(0xFFF2CDB4),
+        onSecondaryFixed = Color(0xFF523A28),
+        onSecondaryFixedVariant = Color(0xFF715642),
+        tertiaryFixed = Color(0xFFFFA363),
+        tertiaryFixedDim = Color(0xFFF4944F),
+        onTertiaryFixed = Color(0xFF381700),
+        onTertiaryFixedVariant = Color(0xFF683000),
+        ),
+    ),
+    LAGOON(
+        "Lagoon",
+        lightColorScheme(
+        primary = Color(0xFF006A6D),
+        onPrimary = Color(0xFFE3FEFF),
+        primaryContainer = Color(0xFF68F0F6),
+        onPrimaryContainer = Color(0xFF00585A),
+        inversePrimary = Color(0xFF6BF3F9),
+        secondary = Color(0xFF695F30),
+        onSecondary = Color(0xFFFFF8E9),
+        secondaryContainer = Color(0xFFF6E9AD),
+        onSecondaryContainer = Color(0xFF5E5527),
+        tertiary = Color(0xFF725D00),
+        onTertiary = Color(0xFFFFF8ED),
+        tertiaryContainer = Color(0xFFFDDB5E),
+        onTertiaryContainer = Color(0xFF5E4D00),
+        background = Color(0xFFEDFCFF),
+        onBackground = Color(0xFF003840),
+        surface = Color(0xFFEDFCFF),
+        onSurface = Color(0xFF003840),
+        surfaceVariant = Color(0xFFB2ECF7),
+        onSurfaceVariant = Color(0xFF2B6771),
+        surfaceTint = Color(0xFF006A6D),
+        inverseSurface = Color(0xFF001114),
+        inverseOnSurface = Color(0xFF84A2A8),
+        error = Color(0xFFAC3434),
+        onError = Color(0xFFFFF7F6),
+        errorContainer = Color(0xFFF56965),
+        onErrorContainer = Color(0xFF65000B),
+        outline = Color(0xFF49838D),
+        outlineVariant = Color(0xFF81BBC6),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFFEDFCFF),
+        surfaceDim = Color(0xFFA2E5F1),
+        surfaceContainer = Color(0xFFC9F6FE),
+        surfaceContainerHigh = Color(0xFFBEF1FB),
+        surfaceContainerHighest = Color(0xFFB2ECF7),
+        surfaceContainerLow = Color(0xFFDBF9FF),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        primaryFixed = Color(0xFF68F0F6),
+        primaryFixedDim = Color(0xFF57E2E7),
+        onPrimaryFixed = Color(0xFF004345),
+        onPrimaryFixedVariant = Color(0xFF006265),
+        secondaryFixed = Color(0xFFF6E9AD),
+        secondaryFixedDim = Color(0xFFE8DAA0),
+        onSecondaryFixed = Color(0xFF4B4317),
+        onSecondaryFixedVariant = Color(0xFF695F30),
+        tertiaryFixed = Color(0xFFFDDB5E),
+        tertiaryFixedDim = Color(0xFFEECD51),
+        onTertiaryFixed = Color(0xFF483B00),
+        onTertiaryFixedVariant = Color(0xFF695600),
+        ),
+        darkColorScheme(
+        primary = Color(0xFFBBFCFF),
+        onPrimary = Color(0xFF006568),
+        primaryContainer = Color(0xFF9CF1F4),
+        onPrimaryContainer = Color(0xFF005B5E),
+        inversePrimary = Color(0xFF006A6D),
+        secondary = Color(0xFFD0C7A2),
+        onSecondary = Color(0xFF464025),
+        secondaryContainer = Color(0xFF2B260D),
+        onSecondaryContainer = Color(0xFFADA481),
+        tertiary = Color(0xFFFFEAA8),
+        onTertiary = Color(0xFF685500),
+        tertiaryContainer = Color(0xFFFDDB5E),
+        onTertiaryContainer = Color(0xFF5E4D00),
+        background = Color(0xFF001114),
+        onBackground = Color(0xFFC3EDF5),
+        surface = Color(0xFF001114),
+        onSurface = Color(0xFFC3EDF5),
+        surfaceVariant = Color(0xFF002B30),
+        onSurfaceVariant = Color(0xFF8AB2B9),
+        surfaceTint = Color(0xFFBBFCFF),
+        inverseSurface = Color(0xFFEDFCFF),
+        inverseOnSurface = Color(0xFF44585C),
+        error = Color(0xFFFF716C),
+        onError = Color(0xFF490006),
+        errorContainer = Color(0xFF8A1A1E),
+        onErrorContainer = Color(0xFFFF9993),
+        outline = Color(0xFF547C83),
+        outlineVariant = Color(0xFF254E54),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFF003138),
+        surfaceDim = Color(0xFF001114),
+        surfaceContainer = Color(0xFF001D22),
+        surfaceContainerHigh = Color(0xFF002429),
+        surfaceContainerHighest = Color(0xFF002B30),
+        surfaceContainerLow = Color(0xFF00161A),
+        surfaceContainerLowest = Color(0xFF000000),
+        primaryFixed = Color(0xFF97EBEE),
+        primaryFixedDim = Color(0xFF88DDE0),
+        onPrimaryFixed = Color(0xFF004345),
+        onPrimaryFixedVariant = Color(0xFF006265),
+        secondaryFixed = Color(0xFFFBF1CA),
+        secondaryFixedDim = Color(0xFFEDE3BC),
+        onSecondaryFixed = Color(0xFF4E482C),
+        onSecondaryFixedVariant = Color(0xFF6B6546),
+        tertiaryFixed = Color(0xFFFDDB5E),
+        tertiaryFixedDim = Color(0xFFEECD51),
+        onTertiaryFixed = Color(0xFF483B00),
+        onTertiaryFixedVariant = Color(0xFF695600),
+        ),
+    ),
+    AZURE(
+        "Azure",
+        lightColorScheme(
+        primary = Color(0xFF3C5CAA),
+        onPrimary = Color(0xFFF9F8FF),
+        primaryContainer = Color(0xFFAABFFF),
+        onPrimaryContainer = Color(0xFF103785),
+        inversePrimary = Color(0xFF85A3F7),
+        secondary = Color(0xFF3D675A),
+        onSecondary = Color(0xFFE4FFF3),
+        secondaryContainer = Color(0xFFCCFBE9),
+        onSecondaryContainer = Color(0xFF386255),
+        tertiary = Color(0xFF006D51),
+        onTertiary = Color(0xFFE5FFF1),
+        tertiaryContainer = Color(0xFF8AFED2),
+        onTertiaryContainer = Color(0xFF006148),
+        background = Color(0xFFFAF8FF),
+        onBackground = Color(0xFF233156),
+        surface = Color(0xFFFAF8FF),
+        onSurface = Color(0xFF233156),
+        surfaceVariant = Color(0xFFDAE2FF),
+        onSurfaceVariant = Color(0xFF505E86),
+        surfaceTint = Color(0xFF3C5CAA),
+        inverseSurface = Color(0xFF060D20),
+        inverseOnSurface = Color(0xFF959CB5),
+        error = Color(0xFFAC3434),
+        onError = Color(0xFFFFF7F6),
+        errorContainer = Color(0xFFF56965),
+        onErrorContainer = Color(0xFF65000B),
+        outline = Color(0xFF6C7AA3),
+        outlineVariant = Color(0xFFA3B1DE),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFFFAF8FF),
+        surfaceDim = Color(0xFFCED9FF),
+        surfaceContainer = Color(0xFFEAEDFF),
+        surfaceContainerHigh = Color(0xFFE2E7FF),
+        surfaceContainerHighest = Color(0xFFDAE2FF),
+        surfaceContainerLow = Color(0xFFF2F3FF),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        primaryFixed = Color(0xFFAABFFF),
+        primaryFixedDim = Color(0xFF96B1FF),
+        onPrimaryFixed = Color(0xFF002362),
+        onPrimaryFixedVariant = Color(0xFF1E418E),
+        secondaryFixed = Color(0xFFCCFBE9),
+        secondaryFixedDim = Color(0xFFBEECDB),
+        onSecondaryFixed = Color(0xFF254F43),
+        onSecondaryFixedVariant = Color(0xFF426C5F),
+        tertiaryFixed = Color(0xFF8AFED2),
+        tertiaryFixedDim = Color(0xFF7BEFC4),
+        onTertiaryFixed = Color(0xFF004D38),
+        onTertiaryFixedVariant = Color(0xFF006D51),
+        ),
+        darkColorScheme(
+        primary = Color(0xFFBECEFF),
+        onPrimary = Color(0xFF304477),
+        primaryContainer = Color(0xFFACBFFB),
+        onPrimaryContainer = Color(0xFF263A6D),
+        inversePrimary = Color(0xFF4A5D92),
+        secondary = Color(0xFFB2CCC2),
+        onSecondary = Color(0xFF2D453D),
+        secondaryContainer = Color(0xFF122A23),
+        onSecondaryContainer = Color(0xFF90AA9F),
+        tertiary = Color(0xFFDAFFEC),
+        onTertiary = Color(0xFF006B4F),
+        tertiaryContainer = Color(0xFF8AFED2),
+        onTertiaryContainer = Color(0xFF006148),
+        background = Color(0xFF090E1B),
+        onBackground = Color(0xFFDEE4FF),
+        surface = Color(0xFF090E1B),
+        onSurface = Color(0xFFDEE4FF),
+        surfaceVariant = Color(0xFF1B253F),
+        onSurfaceVariant = Color(0xFFA1AACB),
+        surfaceTint = Color(0xFFBECEFF),
+        inverseSurface = Color(0xFFFAF8FF),
+        inverseOnSurface = Color(0xFF505565),
+        error = Color(0xFFFF716C),
+        onError = Color(0xFF490006),
+        errorContainer = Color(0xFF8A1A1E),
+        onErrorContainer = Color(0xFFFF9993),
+        outline = Color(0xFF6B7593),
+        outlineVariant = Color(0xFF3E4763),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFF202B49),
+        surfaceDim = Color(0xFF090E1B),
+        surfaceContainer = Color(0xFF12192D),
+        surfaceContainerHigh = Color(0xFF161F36),
+        surfaceContainerHighest = Color(0xFF1B253F),
+        surfaceContainerLow = Color(0xFF0D1323),
+        surfaceContainerLowest = Color(0xFF000000),
+        primaryFixed = Color(0xFFACBFFB),
+        primaryFixedDim = Color(0xFF9EB2ED),
+        onPrimaryFixed = Color(0xFF0D2557),
+        onPrimaryFixedVariant = Color(0xFF2F4377),
+        secondaryFixed = Color(0xFFDCF7EB),
+        secondaryFixedDim = Color(0xFFCEE9DD),
+        onSecondaryFixed = Color(0xFF354D45),
+        onSecondaryFixedVariant = Color(0xFF516961),
+        tertiaryFixed = Color(0xFF8AFED2),
+        tertiaryFixedDim = Color(0xFF7BEFC4),
+        onTertiaryFixed = Color(0xFF004D38),
+        onTertiaryFixedVariant = Color(0xFF006D51),
+        ),
+    ),
+    FUCHSIA(
+        "Fuchsia",
+        lightColorScheme(
+        primary = Color(0xFF994164),
+        onPrimary = Color(0xFFFFF7F7),
+        primaryContainer = Color(0xFFFFA8C5),
+        onPrimaryContainer = Color(0xFF6D1E41),
+        inversePrimary = Color(0xFFFA90B6),
+        secondary = Color(0xFF396667),
+        onSecondary = Color(0xFFE0FFFF),
+        secondaryContainer = Color(0xFFC9FAFA),
+        onSecondaryContainer = Color(0xFF336162),
+        tertiary = Color(0xFF006B68),
+        onTertiary = Color(0xFFE1FFFC),
+        tertiaryContainer = Color(0xFF69F1EC),
+        onTertiaryContainer = Color(0xFF005856),
+        background = Color(0xFFFFF8F8),
+        onBackground = Color(0xFF502435),
+        surface = Color(0xFFFFF8F8),
+        onSurface = Color(0xFF502435),
+        surfaceVariant = Color(0xFFFFD9E3),
+        onSurfaceVariant = Color(0xFF844F62),
+        surfaceTint = Color(0xFF994164),
+        inverseSurface = Color(0xFF1D070F),
+        inverseOnSurface = Color(0xFFB9939E),
+        error = Color(0xFFAC3149),
+        onError = Color(0xFFFFF7F7),
+        errorContainer = Color(0xFFF76A80),
+        onErrorContainer = Color(0xFF68001F),
+        outline = Color(0xFFA36A7D),
+        outlineVariant = Color(0xFFE0A0B5),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFFFFF8F8),
+        surfaceDim = Color(0xFFFFCDDB),
+        surfaceContainer = Color(0xFFFFE8ED),
+        surfaceContainerHigh = Color(0xFFFFE1E8),
+        surfaceContainerHighest = Color(0xFFFFD9E3),
+        surfaceContainerLow = Color(0xFFFFF0F3),
+        surfaceContainerLowest = Color(0xFFFFFFFF),
+        primaryFixed = Color(0xFFFFA8C5),
+        primaryFixedDim = Color(0xFFFD93B9),
+        onPrimaryFixed = Color(0xFF52062C),
+        onPrimaryFixedVariant = Color(0xFF79274A),
+        secondaryFixed = Color(0xFFC9FAFA),
+        secondaryFixedDim = Color(0xFFBBEBEC),
+        onSecondaryFixed = Color(0xFF204F50),
+        onSecondaryFixedVariant = Color(0xFF3E6C6D),
+        tertiaryFixed = Color(0xFF69F1EC),
+        tertiaryFixedDim = Color(0xFF58E3DE),
+        onTertiaryFixed = Color(0xFF004442),
+        onTertiaryFixedVariant = Color(0xFF006360),
+        ),
+        darkColorScheme(
+        primary = Color(0xFFFFC1D4),
+        onPrimary = Color(0xFF70334B),
+        primaryContainer = Color(0xFFFEACC7),
+        onPrimaryContainer = Color(0xFF652B42),
+        inversePrimary = Color(0xFF8C4A62),
+        secondary = Color(0xFFB0CCCC),
+        onSecondary = Color(0xFF2B4445),
+        secondaryContainer = Color(0xFF102A2A),
+        onSecondaryContainer = Color(0xFF8EA9A9),
+        tertiary = Color(0xFF80FFFA),
+        onTertiary = Color(0xFF00615F),
+        tertiaryContainer = Color(0xFF69F1EC),
+        onTertiaryContainer = Color(0xFF005856),
+        background = Color(0xFF1A090F),
+        onBackground = Color(0xFFFFDDE6),
+        surface = Color(0xFF1A090F),
+        onSurface = Color(0xFFFFDDE6),
+        surfaceVariant = Color(0xFF3C1C27),
+        onSurfaceVariant = Color(0xFFCF9EAD),
+        surfaceTint = Color(0xFFFFC1D4),
+        inverseSurface = Color(0xFFFFF8F8),
+        inverseOnSurface = Color(0xFF674E56),
+        error = Color(0xFFFD6F85),
+        onError = Color(0xFF490013),
+        errorContainer = Color(0xFF8A1632),
+        onErrorContainer = Color(0xFFFF97A3),
+        outline = Color(0xFF956977),
+        outlineVariant = Color(0xFF633D4A),
+        scrim = Color(0xFF000000),
+        surfaceBright = Color(0xFF45202E),
+        surfaceDim = Color(0xFF1A090F),
+        surfaceContainer = Color(0xFF2A121B),
+        surfaceContainerHigh = Color(0xFF331721),
+        surfaceContainerHighest = Color(0xFF3C1C27),
+        surfaceContainerLow = Color(0xFF210D14),
+        surfaceContainerLowest = Color(0xFF000000),
+        primaryFixed = Color(0xFFFEACC7),
+        primaryFixedDim = Color(0xFFEF9FBA),
+        onPrimaryFixed = Color(0xFF4C162D),
+        onPrimaryFixedVariant = Color(0xFF70334B),
+        secondaryFixed = Color(0xFFDAF6F6),
+        secondaryFixedDim = Color(0xFFCCE8E8),
+        onSecondaryFixed = Color(0xFF334C4D),
+        onSecondaryFixedVariant = Color(0xFF4F6969),
+        tertiaryFixed = Color(0xFF69F1EC),
+        tertiaryFixedDim = Color(0xFF58E3DE),
+        onTertiaryFixed = Color(0xFF004442),
+        onTertiaryFixedVariant = Color(0xFF006360),
+        ),
+    );
+}
+
+/** The two schemes the concept itself was drawn in, kept named for the places that reference them. */
+internal val ConceptLight: ColorScheme = Palette.CONCEPT.light
+internal val ConceptDark: ColorScheme = Palette.CONCEPT.dark
+```
+
+
+---
+
+## `app/src/main/java/app/expressiveclock/ui/theme/Theme.kt`
+
+```kotlin
+package app.expressiveclock.ui.theme
+
+import android.graphics.Color as AndroidColor
+import android.os.Build
+import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.LocalActivity
+import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
+import androidx.compose.material3.LocalTonalElevationEnabled
+import androidx.compose.material3.MaterialExpressiveTheme
+import androidx.compose.material3.MotionScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
+import android.view.ViewTreeObserver
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.view.WindowCompat
+import app.expressiveclock.data.DarkMode
+import app.expressiveclock.data.ThemeSettings
+
+/**
+ * The theme root.
+ *
+ * [MaterialExpressiveTheme] rather than `MaterialTheme` is the single most consequential line here:
+ * it installs the expressive motion scheme, shapes and the emphasized type slots. It carries no
+ * opt-in annotation in 1.5.0-alpha25; the theming layer went stable ahead of the components.
+ *
+ * ## One scheme for the whole app
+ *
+ * An earlier build ran Alarms and World Clock dark while Timers and Stopwatch were light, because
+ * that is how the concept renders happened to be published. As a *reconstruction* that was
+ * faithful; as an *app* it was indefensible. Light and dark are a user setting and an
+ * accessibility one, and no four-tab app should flash white when you press the third tab at 3 a.m.
+ * The concept's contrast is preserved instead through surface roles, which is where it belongs.
+ *
+ * ## Colour source
+ *
+ * Wallpaper colour is the default from API 31 up. Below that, or with it switched off, the app
+ * falls back to one of the [Palette] entries.
+ */
+@Composable
+fun ClockTheme(
+    settings: ThemeSettings = ThemeSettings(),
+    content: @Composable () -> Unit,
+) {
+    val dark = when (settings.darkMode) {
+        DarkMode.SYSTEM -> isSystemInDarkTheme()
+        DarkMode.LIGHT -> false
+        DarkMode.DARK -> true
+    }
+
+    val context = LocalContext.current
+    val base = when {
+        settings.dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S ->
+            if (dark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+        dark -> settings.palette.dark
+        else -> settings.palette.light
+    }
+    val amoled = dark && settings.amoledBlack
+    val scheme = remember(base, amoled) { if (amoled) base.toAmoledBlack() else base }
+
+    val activity = LocalActivity.current as? ComponentActivity
+    // AndroidX keeps its first configuration listener. Its detector must read the latest
+    // app override, not capture the system/default theme from before DataStore loads.
+    val currentDark = rememberUpdatedState(dark)
+    LaunchedEffect(dark, activity) {
+        val bar = SystemBarStyle.auto(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT) {
+            currentDark.value
+        }
+        activity?.enableEdgeToEdge(statusBarStyle = bar, navigationBarStyle = bar)
+        activity?.window?.let { window ->
+            // enableEdgeToEdge owns decor fitting and transparent system-bar colors.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                window.isNavigationBarContrastEnforced = false
+                // Preserve the legacy three-button appearance; Android 15 no longer
+                // needs this deprecated divider-color API.
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+                    @Suppress("DEPRECATION")
+                    window.navigationBarDividerColor = AndroidColor.TRANSPARENT
+                }
+            }
+        }
+    }
+
+    DisposableEffect(activity) {
+        val window = activity?.window
+        val decor = window?.decorView
+        // Splash dismissal and returning from another window can restore platform appearance.
+        // Apply on focus without polling or changing the user's chosen theme.
+        val listener = ViewTreeObserver.OnWindowFocusChangeListener { focused ->
+            if (focused && window != null && decor != null) {
+                WindowCompat.getInsetsController(window, decor).apply {
+                    isAppearanceLightStatusBars = !currentDark.value
+                    isAppearanceLightNavigationBars = !currentDark.value
+                }
+            }
+        }
+        decor?.viewTreeObserver?.addOnWindowFocusChangeListener(listener)
+        onDispose {
+            decor?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnWindowFocusChangeListener(listener)
+        }
+    }
+
+    CompositionLocalProvider(
+        // Without this, `Surface` composites `surfaceTint` over its container as elevation rises,
+        // quietly painting grey back over a pure-black AMOLED background, which is the one thing
+        // the setting exists to prevent.
+        LocalTonalElevationEnabled provides !amoled,
+    ) {
+        MaterialExpressiveTheme(
+            colorScheme = scheme,
+            // [M3E-NEW] Under-damped spatial springs paired with critically damped effects
+            // springs. Movement overshoots; colour never does. On a clock that asymmetry has more
+            // to do than usual, since every screen here has something in continuous motion.
+            motionScheme = MotionScheme.expressive(),
+            typography = remember { clockTypography() },
+            content = content,
+        )
+    }
+}
+
+/**
+ * True-black variant of a dark scheme, for OLED panels.
+ *
+ * A clock is the app most likely to be showing on a dimmed screen at 3 a.m., which is exactly when
+ * a near-black surface still glows. Accent roles and the upper containers are untouched: the alarm
+ * tiles live on `surfaceContainer`, so blackening the page increases their separation rather than
+ * flattening it.
+ */
+fun ColorScheme.toAmoledBlack(): ColorScheme = copy(
+    background = Color.Black,
+    surface = Color.Black,
+    surfaceDim = Color.Black,
+    surfaceContainerLowest = Color.Black,
+    surfaceContainerLow = Color(0xFF0A0A0A),
+    surfaceContainer = Color(0xFF141018),
+    scrim = Color.Black,
+)
+```
